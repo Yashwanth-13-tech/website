@@ -1,0 +1,102 @@
+[
+  {
+    "id": "loc_airport",
+    "name": "Bangalore Airport (BLR)",
+    "zone": "Airport",
+    "lat": 13.1986,
+    "lng": 77.7066,
+    "active": true,
+    "createdAt": "2026-09-04T04:14:47.789Z",
+    "updatedAt": "2026-09-04T04:14:47.789Z"
+  },
+  {
+    "id": "loc_electronic_city",
+    "name": "Electronic City",
+    "zone": "South",
+    "lat": 12.8452,
+    "lng": 77.6602,
+    "active": true,
+    "createdAt": "2026-09-04T04:22:08.795Z",
+    "updatedAt": "2026-09-04T04:22:08.795Z"
+  },
+  {
+    "id": "loc_hsr",
+    "name": "HSR Layout",
+    "zone": "South",
+    "lat": 12.9121,
+    "lng": 77.6446,
+    "active": true,
+    "createdAt": "2026-09-04T04:22:08.795Z",
+    "updatedAt": "2026-09-04T04:22:08.795Z"
+  },
+  {
+    "id": "loc_hebbal",
+    "name": "Hebbal & Manyata",
+    "zone": "North",
+    "lat": 13.0358,
+    "lng": 77.597,
+    "active": true,
+    "createdAt": "2026-09-04T04:22:08.795Z",
+    "updatedAt": "2026-09-04T04:22:08.795Z"
+  },
+  {
+    "id": "loc_indiranagar",
+    "name": "Indiranagar",
+    "zone": "Central",
+    "lat": 12.9784,
+    "lng": 77.6408,
+    "active": true,
+    "createdAt": "2026-09-04T04:14:47.802Z",
+    "updatedAt": "2026-09-04T04:14:47.802Z"
+  },
+  {
+    "id": "loc_jayanagar",
+    "name": "Jayanagar & JP Nagar",
+    "zone": "South",
+    "lat": 12.9308,
+    "lng": 77.5838,
+    "active": true,
+    "createdAt": "2026-09-04T04:22:08.795Z",
+    "updatedAt": "2026-09-04T04:22:08.795Z"
+  },
+  {
+    "id": "loc_koramangala",
+    "name": "Koramangala",
+    "zone": "South",
+    "lat": 12.9352,
+    "lng": 77.6245,
+    "active": true,
+    "createdAt": "2026-09-04T04:14:47.794Z",
+    "updatedAt": "2026-09-04T04:14:47.794Z"
+  },
+  {
+    "id": "loc_mg_road",
+    "name": "MG Road & Brigade",
+    "zone": "Central",
+    "lat": 12.9756,
+    "lng": 77.6066,
+    "active": true,
+    "createdAt": "2026-09-04T04:22:08.795Z",
+    "updatedAt": "2026-09-04T04:22:08.795Z"
+  },
+  {
+    "id": "loc_marathahalli",
+    "name": "Marathahalli & ORR",
+    "zone": "East",
+    "lat": 12.9591,
+    "lng": 77.6974,
+    "active": true,
+    "createdAt": "2026-09-04T04:22:08.795Z",
+    "updatedAt": "2026-09-04T04:22:08.795Z"
+  },
+  {
+    "id": "loc_whitefield",
+    "name": "Whitefield & ITPL",
+    "zone": "East",
+    "lat": 12.9698,
+    "lng": 77.7499,
+    "active": true,
+    "createdAt": "2026-09-04T04:22:08.795Z",
+    "updatedAt": "2026-09-04T04:22:08.795Z"
+  }
+]

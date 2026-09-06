@@ -655,6 +655,38 @@ export function razorpayApiPlugin() {
           }
         }
 
+        if (url === '/api/inquiries/reset' && req.method === 'POST') {
+          try {
+            const authHeader = req.headers['authorization'] || ''
+            const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+            const session = token ? (activeAdminSessions.get(token) || await appDb.getSession(token)) : null
+            if (!session) {
+              return sendJson(res, 401, { success: false, message: 'Unauthorized. Admin token required.' })
+            }
+
+            await appDb.resetInquiries()
+            return sendJson(res, 200, { success: true, message: 'Inquiries reset.', inquiries: [] })
+          } catch (err) {
+            return sendJson(res, 500, { success: false, message: err.message })
+          }
+        }
+
+        if (url === '/api/bookings' && req.method === 'GET') {
+          try {
+            const authHeader = req.headers['authorization'] || ''
+            const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+            const session = token ? (activeAdminSessions.get(token) || await appDb.getSession(token)) : null
+            if (!session) {
+              return sendJson(res, 401, { success: false, message: 'Unauthorized. Admin token required.' })
+            }
+
+            const bookings = await appDb.getBookings()
+            return sendJson(res, 200, { success: true, count: bookings.length, bookings })
+          } catch (err) {
+            return sendJson(res, 500, { success: false, message: err.message })
+          }
+        }
+
         next()
       })
     },
