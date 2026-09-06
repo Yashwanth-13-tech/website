@@ -16,6 +16,7 @@ import {
   Sparkles,
   MapPin,
   Calendar,
+  Images,
 } from 'lucide-react'
 import { useCars } from '../../context/CarContext.jsx'
 import { formatPrice } from '../../utils/pricing.js'
@@ -26,7 +27,19 @@ import DeleteAllConfirmModal from '../components/DeleteAllConfirmModal.jsx'
 const STATUS_OPTIONS = ['All Statuses', 'Available', 'Booked', 'Popular']
 
 export default function AdminCars() {
-  const { cars, addCar, updateCar, deleteCar, deleteAllCars, toggleAvailability, togglePopular, resetCars, loading, locations, refreshData } = useCars()
+  const {
+    cars = [],
+    addCar,
+    updateCar,
+    deleteCar,
+    deleteAllCars,
+    toggleAvailability,
+    togglePopular,
+    resetCars,
+    loading = false,
+    locations = [],
+    refreshData,
+  } = useCars() || {}
 
   useEffect(() => {
     if (typeof refreshData === 'function') {
@@ -37,7 +50,10 @@ export default function AdminCars() {
   // Build a quick location id→name lookup
   const locationMap = useMemo(() => {
     const m = {}
-    for (const loc of locations) m[loc.id] = loc
+    const locList = Array.isArray(locations) ? locations : []
+    for (const loc of locList) {
+      if (loc && loc.id) m[loc.id] = loc
+    }
     return m
   }, [locations])
 
@@ -54,15 +70,19 @@ export default function AdminCars() {
   const [actionLoading, setActionLoading] = useState(false)
   const [notification, setNotification] = useState(null)
 
+  const safeCarsList = Array.isArray(cars) ? cars : []
+
   // Dynamically compute category filters based on current cars
   const dynamicCategories = useMemo(() => {
-    const raw = Array.from(new Set(cars.map((c) => c.category).filter(Boolean)))
+    const raw = Array.from(new Set(safeCarsList.map((c) => c?.category).filter(Boolean)))
     return ['All', ...raw]
-  }, [cars])
+  }, [safeCarsList])
 
   // Filter and sort logic
   const filteredCars = useMemo(() => {
-    let result = cars.filter((car) => {
+    let result = safeCarsList.filter((car) => {
+      if (!car) return false
+
       // Category match
       const matchCat = categoryFilter === 'All' || car.category === categoryFilter
 
@@ -89,20 +109,20 @@ export default function AdminCars() {
     // Sort
     switch (sortBy) {
       case 'price-asc':
-        return [...result].sort((a, b) => a.pricePerDay - b.pricePerDay)
+        return [...result].sort((a, b) => (Number(a?.pricePerDay) || 0) - (Number(b?.pricePerDay) || 0))
       case 'price-desc':
-        return [...result].sort((a, b) => b.pricePerDay - a.pricePerDay)
+        return [...result].sort((a, b) => (Number(b?.pricePerDay) || 0) - (Number(a?.pricePerDay) || 0))
       case 'rating-desc':
-        return [...result].sort((a, b) => b.rating - a.rating)
+        return [...result].sort((a, b) => (Number(b?.rating) || 0) - (Number(a?.rating) || 0))
       case 'year-desc':
-        return [...result].sort((a, b) => b.year - a.year)
+        return [...result].sort((a, b) => (Number(b?.year) || 0) - (Number(a?.year) || 0))
       case 'id-desc':
-        return [...result].sort((a, b) => b.id - a.id)
+        return [...result].sort((a, b) => (Number(b?.id) || 0) - (Number(a?.id) || 0))
       case 'id-asc':
       default:
-        return [...result].sort((a, b) => a.id - b.id)
+        return [...result].sort((a, b) => (Number(a?.id) || 0) - (Number(b?.id) || 0))
     }
-  }, [cars, query, categoryFilter, statusFilter, sortBy])
+  }, [safeCarsList, query, categoryFilter, statusFilter, sortBy])
 
   // Save handler for Add / Edit
   const handleSaveCar = async (formData) => {
@@ -115,7 +135,7 @@ export default function AdminCars() {
     }
     setActionLoading(false)
 
-    if (res.success) {
+    if (res && res.success) {
       setEditingCar(null)
       setShowAddModal(false)
       setNotification({
@@ -126,7 +146,7 @@ export default function AdminCars() {
     } else {
       setNotification({
         type: 'error',
-        message: res.error || 'Failed to save vehicle details',
+        message: res?.error || 'Failed to save vehicle details',
       })
       setTimeout(() => setNotification(null), 5000)
     }
@@ -137,11 +157,11 @@ export default function AdminCars() {
     if (!deletingCar) return
     setActionLoading(true)
     setNotification(null)
-    const carName = `${deletingCar.brand} ${deletingCar.model}`
+    const carName = `${deletingCar.brand || 'Vehicle'} ${deletingCar.model || ''}`.trim()
     const res = await deleteCar(deletingCar.id)
     setActionLoading(false)
 
-    if (res.success) {
+    if (res && res.success) {
       setDeletingCar(null)
       setNotification({
         type: 'success',
@@ -151,7 +171,7 @@ export default function AdminCars() {
     } else {
       setNotification({
         type: 'error',
-        message: res.error || 'Failed to delete vehicle from server.',
+        message: res?.error || 'Failed to delete vehicle from server.',
       })
       setTimeout(() => setNotification(null), 5000)
     }
@@ -165,7 +185,7 @@ export default function AdminCars() {
     setActionLoading(false)
     setShowDeleteAllModal(false)
 
-    if (res.success) {
+    if (res && res.success) {
       setNotification({
         type: 'success',
         message: `All ${res.deletedCount || 0} vehicles were permanently deleted from inventory.`,
@@ -174,7 +194,7 @@ export default function AdminCars() {
     } else {
       setNotification({
         type: 'error',
-        message: res.error || 'Failed to delete all vehicles from server.',
+        message: res?.error || 'Failed to delete all vehicles from server.',
       })
       setTimeout(() => setNotification(null), 6000)
     }
@@ -186,7 +206,7 @@ export default function AdminCars() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="font-display text-2xl font-extrabold text-charcoal-900">
-            Car Inventory ({cars.length})
+            Car Inventory ({safeCarsList.length})
           </h2>
           <p className="text-xs text-charcoal-500">
             Manage your live vehicle catalog. Changes immediately update the public website.
@@ -194,7 +214,7 @@ export default function AdminCars() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          {cars.length > 0 && (
+          {safeCarsList.length > 0 && (
             <button
               type="button"
               onClick={() => setShowDeleteAllModal(true)}
@@ -216,7 +236,6 @@ export default function AdminCars() {
           </button>
         </div>
       </div>
-
 
       {/* Notification Banner */}
       {notification && (
@@ -300,24 +319,45 @@ export default function AdminCars() {
         </div>
       </div>
 
-      {/* Inventory Table / Grid */}
+      {/* Inventory Table / Grid / Empty State */}
       {filteredCars.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-3xl border border-charcoal-900/10 bg-white py-16 text-center shadow-sm">
-          <Car size={40} className="text-charcoal-300 mb-3" />
-          <h3 className="font-display text-base font-bold text-charcoal-900">No vehicles found</h3>
+        <div className="flex flex-col items-center justify-center rounded-3xl border border-charcoal-900/10 bg-white py-16 text-center shadow-sm px-4">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-charcoal-100 text-charcoal-400 mb-3">
+            <Car size={32} />
+          </div>
+          <h3 className="font-display text-base font-bold text-charcoal-900">
+            {safeCarsList.length === 0 ? 'No vehicles in inventory' : 'No matching vehicles found'}
+          </h3>
           <p className="text-xs text-charcoal-500 mt-1 max-w-sm">
-            Try adjusting your search terms or filters to find the cars you're looking for.
+            {safeCarsList.length === 0
+              ? 'Your fleet catalog is currently empty. Click "Add Vehicle" to add your first car to the live inventory.'
+              : 'Try adjusting your search terms or filter criteria.'}
           </p>
-          <button
-            onClick={() => {
-              setQuery('')
-              setCategoryFilter('All')
-              setStatusFilter('All Statuses')
-            }}
-            className="btn-dark mt-4 text-xs !py-2 !px-4"
-          >
-            Clear Filters
-          </button>
+
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
+            {safeCarsList.length === 0 ? (
+              <button
+                type="button"
+                onClick={() => setShowAddModal(true)}
+                className="btn-accent text-xs !py-2.5 !px-5"
+              >
+                <Plus size={15} />
+                <span>Add First Vehicle</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setQuery('')
+                  setCategoryFilter('All')
+                  setStatusFilter('All Statuses')
+                }}
+                className="btn-dark text-xs !py-2 !px-4"
+              >
+                Clear Filters
+              </button>
+            )}
+          </div>
         </div>
       ) : (
         <div className="overflow-hidden rounded-3xl border border-charcoal-900/10 bg-white shadow-sm">
@@ -337,7 +377,12 @@ export default function AdminCars() {
               </thead>
               <tbody className="divide-y divide-charcoal-900/5 font-medium text-charcoal-700">
                 {filteredCars.map((car) => {
-                  const imageCount = (car.images && car.images.length) || (car.image ? 1 : 0)
+                  const carImages = Array.isArray(car?.images) && car.images.length > 0
+                    ? car.images
+                    : (car?.image ? [car.image] : [])
+                  const imageCount = carImages.length
+                  const displayImage = carImages[0] || 'https://images.unsplash.com/photo-1617469767053-d3b523a0b982?auto=format&fit=crop&w=800&q=80'
+
                   return (
                     <tr key={car.id} className="hover:bg-charcoal-50/50 transition-colors">
                       {/* Vehicle image & brand */}
@@ -345,9 +390,10 @@ export default function AdminCars() {
                         <div className="flex items-center gap-3">
                           <div className="relative h-14 w-20 shrink-0 overflow-hidden rounded-xl bg-charcoal-100 ring-1 ring-charcoal-900/10">
                             <img
-                              src={car.image}
-                              alt={`${car.brand} ${car.model}`}
+                              src={displayImage}
+                              alt={`${car.brand || 'Vehicle'} ${car.model || ''}`}
                               className="h-full w-full object-cover"
+                              loading="lazy"
                             />
                             {imageCount > 1 && (
                               <span className="absolute bottom-1 right-1 flex items-center gap-0.5 rounded bg-charcoal-950/75 px-1 py-0.2 text-[9px] font-bold text-white backdrop-blur-xs">
@@ -360,7 +406,7 @@ export default function AdminCars() {
                               {car.brand} {car.model}
                             </p>
                             <p className="text-[11px] text-charcoal-400 font-medium">
-                              {car.year} Model • ID #{car.id}
+                              {car.year || 2026} Model • ID #{car.id}
                             </p>
                           </div>
                         </div>
@@ -369,7 +415,7 @@ export default function AdminCars() {
                       {/* Category */}
                       <td className="px-4 py-4">
                         <span className="rounded-lg bg-charcoal-100 px-2.5 py-1 text-[11px] font-bold text-charcoal-800">
-                          {car.category}
+                          {car.category || 'Standard'}
                         </span>
                       </td>
 
@@ -377,17 +423,17 @@ export default function AdminCars() {
                       <td className="px-4 py-4">
                         <div className="flex flex-col gap-1 text-[11px] text-charcoal-600">
                           <span className="flex items-center gap-1">
-                            <Settings size={12} className="text-charcoal-400" /> {car.transmission}
+                            <Settings size={12} className="text-charcoal-400" /> {car.transmission || 'Automatic'}
                           </span>
                           <span className="flex items-center gap-1">
-                            <Fuel size={12} className="text-charcoal-400" /> {car.fuel} • {car.seats} Seats
+                            <Fuel size={12} className="text-charcoal-400" /> {car.fuel || 'Petrol'} • {car.seats || 5} Seats
                           </span>
                         </div>
                       </td>
 
                       {/* Price */}
                       <td className="px-4 py-4 font-display font-extrabold text-sm text-charcoal-900">
-                        {formatPrice(car.pricePerDay)}
+                        {formatPrice(car.pricePerDay || 1500)}
                         <span className="text-[10px] font-normal text-charcoal-400">/day</span>
                       </td>
 
@@ -403,7 +449,7 @@ export default function AdminCars() {
                                   className="inline-flex items-center gap-0.5 rounded-md bg-accent-50 border border-accent-200/60 px-1.5 py-0.5 text-[10px] font-bold text-accent-700 truncate max-w-[120px]"
                                 >
                                   <MapPin size={9} className="shrink-0" />
-                                  <span className="truncate">{loc.name.split(' ')[0]}</span>
+                                  <span className="truncate">{(loc.name || '').split(' ')[0]}</span>
                                 </span>
                               ) : null
                             })}
@@ -414,7 +460,7 @@ export default function AdminCars() {
                             )}
                           </div>
                         ) : (
-                          <span className="text-[11px] text-charcoal-400">Not assigned</span>
+                          <span className="text-[11px] text-charcoal-400">All Hubs</span>
                         )}
                       </td>
 
@@ -422,7 +468,7 @@ export default function AdminCars() {
                       <td className="px-4 py-4">
                         <button
                           type="button"
-                          onClick={() => toggleAvailability(car.id)}
+                          onClick={() => toggleAvailability && toggleAvailability(car.id)}
                           className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-bold transition-all shadow-xs ${
                             car.available
                               ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
@@ -446,7 +492,7 @@ export default function AdminCars() {
                       <td className="px-4 py-4">
                         <button
                           type="button"
-                          onClick={() => togglePopular(car.id)}
+                          onClick={() => togglePopular && togglePopular(car.id)}
                           className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold transition-all ${
                             car.popular
                               ? 'bg-accent-50 text-accent-700 hover:bg-accent-100 border border-accent-200'
@@ -508,7 +554,7 @@ export default function AdminCars() {
       {/* Delete Single Car Confirmation Modal */}
       {deletingCar && (
         <DeleteConfirmModal
-          title={`Delete ${deletingCar.brand} ${deletingCar.model}?`}
+          title={`Delete ${deletingCar.brand || 'Vehicle'} ${deletingCar.model || ''}?`}
           message={`Are you sure you want to delete this vehicle from your inventory? It will immediately disappear from the public website and booking options.`}
           onConfirm={handleConfirmDelete}
           onCancel={() => setDeletingCar(null)}
@@ -519,7 +565,7 @@ export default function AdminCars() {
       {/* Delete All Vehicles Safety Confirmation Modal */}
       {showDeleteAllModal && (
         <DeleteAllConfirmModal
-          carsCount={cars.length}
+          carsCount={safeCarsList.length}
           onConfirm={handleConfirmDeleteAll}
           onCancel={() => setShowDeleteAllModal(false)}
           loading={actionLoading}
@@ -528,4 +574,3 @@ export default function AdminCars() {
     </div>
   )
 }
-
