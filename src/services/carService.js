@@ -37,14 +37,18 @@ export const carService = {
           }
           return data.cars.sort((a, b) => Number(a.id) - Number(b.id))
         }
+      } else {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.message || `Failed to fetch vehicles (Status: ${res.status})`)
       }
     } catch (err) {
-      console.warn('[CarService] Network notice: Using cached cars:', err.message)
+      console.warn('[CarService] Backend query notice:', err.message)
+      const localCars = await getAllFromStore('cars')
+      if (localCars && localCars.length > 0) {
+        return localCars.sort((a, b) => Number(a.id) - Number(b.id))
+      }
+      throw err
     }
-
-    // Offline fallback to local IndexedDB store if network is unavailable
-    const localCars = await getAllFromStore('cars')
-    return localCars.sort((a, b) => Number(a.id) - Number(b.id))
   },
 
   /**
@@ -262,6 +266,5 @@ export const carService = {
     return await this.deleteAllCars()
   },
 }
-
 
 export default carService

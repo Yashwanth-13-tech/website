@@ -16,64 +16,41 @@ const __dirname = path.dirname(__filename)
 // ----------------------------------------------------------------------------
 // Database Engine Initialization
 // ----------------------------------------------------------------------------
+const isProduction = process.env.NODE_ENV === 'production'
 const POSTGRES_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.PGURI
 
 let pgPool = null
 let sqliteDb = null
-let activeEngine = 'sqlite'
-let isMemoryFallback = false
+let activeEngine = isProduction ? 'postgres' : (POSTGRES_URL ? 'postgres' : 'sqlite')
+let dbConnectionError = null
 
-// In-memory collections for resilient demo fallback
-const memoryStore = {
-  vehicles: DEMO_VEHICLES.map((v) => new Vehicle(v)),
-  locations: DEMO_LOCATIONS.map((l) => new Location(l)),
-  unavailability: DEMO_UNAVAILABILITY.map((u) => new VehicleUnavailability(u)),
-  inquiries: [],
-  bookings: [],
-  sessions: new Map(),
+if (isProduction && !POSTGRES_URL) {
+  dbConnectionError = 'FATAL: DATABASE_URL environment variable is required in production! Configure DATABASE_URL in Render Dashboard.'
+  console.error(`\n[Database Configuration Error] ${dbConnectionError}\n`)
 }
 
 if (POSTGRES_URL) {
   activeEngine = 'postgres'
-  console.log('[Database] Connecting to PostgreSQL Single Source of Truth...')
+  console.log('[Database] Initializing PostgreSQL Single Source of Truth...')
   pgPool = new Pool({
     connectionString: POSTGRES_URL,
     ssl: POSTGRES_URL.includes('localhost') || POSTGRES_URL.includes('127.0.0.1') ? false : { rejectUnauthorized: false },
-    max: 15,
+    max: 20,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 8000,
+    connectionTimeoutMillis: 10000,
   })
 
   pgPool.on('error', (err) => {
     console.error('[Database Pool Error]:', err.message)
+    dbConnectionError = err.message
   })
-} else {
+} else if (!isProduction) {
   activeEngine = 'sqlite'
   function resolveDatabasePath() {
     if (process.env.DATABASE_PATH) {
       const dir = path.dirname(process.env.DATABASE_PATH)
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
       return process.env.DATABASE_PATH
-    }
-
-    const envDir = process.env.DATA_DIR || process.env.PERSISTENT_STORAGE_PATH || process.env.PERSISTENT_DATA_DIR
-    if (envDir) {
-      try {
-        if (!fs.existsSync(envDir)) fs.mkdirSync(envDir, { recursive: true })
-        return path.join(envDir, 'blrcruiz.db')
-      } catch {}
-    }
-
-    const persistentMounts = ['/var/data', '/data']
-    for (const mount of persistentMounts) {
-      if (fs.existsSync(mount)) {
-        try {
-          const testFile = path.join(mount, '.write_test')
-          fs.writeFileSync(testFile, 'ok')
-          fs.unlinkSync(testFile)
-          return path.join(mount, 'blrcruiz.db')
-        } catch {}
-      }
     }
 
     const localDataDir = path.resolve(__dirname, '..', 'data')
@@ -89,14 +66,13 @@ if (POSTGRES_URL) {
 
   try {
     const DB_FILE = resolveDatabasePath()
-    console.log(`[Database] Initializing SQLite Single-Source-of-Truth at: ${DB_FILE}`)
+    console.log(`[Database (Development Only)] Initializing local SQLite at: ${DB_FILE}`)
     sqliteDb = new DatabaseSync(DB_FILE)
     sqliteDb.exec('PRAGMA journal_mode = WAL;')
     sqliteDb.exec('PRAGMA synchronous = NORMAL;')
   } catch (err) {
-    console.warn('[Database] SQLite initialization warning, falling back to resilient in-memory mode:', err.message)
-    isMemoryFallback = true
-    activeEngine = 'memory'
+    dbConnectionError = err.message
+    console.error('[Database Error] SQLite initialization failed:', err.message)
   }
 }
 
@@ -106,12 +82,11 @@ if (POSTGRES_URL) {
 let initPromise = null
 
 async function initSchema() {
-  if (isMemoryFallback) {
-    console.log('[Database] Operating in Resilient In-Memory Demo Mode.')
-    return
-  }
-
   if (activeEngine === 'postgres') {
+    if (!POSTGRES_URL) {
+      throw new Error(dbConnectionError || 'DATABASE_URL is missing for PostgreSQL')
+    }
+
     let client
     try {
       client = await pgPool.connect()
@@ -233,31 +208,56 @@ async function initSchema() {
         );
       `)
 
-      // Seed default locations if missing without overwriting
-      for (const loc of DEMO_LOCATIONS) {
-        await client.query(`
-          INSERT INTO locations (
-            id, name, slug, address, description, is_active, pickup_available, return_available,
-            delivery_fee, phone, whatsapp_number, coordinates, zone, lat, lng, active, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW(), NOW())
-          ON CONFLICT (id) DO NOTHING;
-        `, [
-          String(loc.id), loc.name, loc.slug, loc.address, loc.description,
-          loc.is_active, loc.pickup_available, loc.return_available, loc.delivery_fee,
-          loc.phone, loc.whatsapp_number, JSON.stringify(loc.coordinates),
-          loc.zone, loc.coordinates.lat, loc.coordinates.lng, loc.is_active
-        ])
+      // Auto-migrate column additions safely
+      const pgCols = [
+        `ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS price_weekend NUMERIC(10,2) DEFAULT 1725;`,
+        `ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS price_weekly NUMERIC(10,2) DEFAULT 1275;`,
+        `ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS price_monthly NUMERIC(10,2) DEFAULT 975;`,
+        `ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS security_deposit NUMERIC(10,2) DEFAULT 3000;`,
+        `ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS mileage_limit INTEGER DEFAULT 300;`,
+        `ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS extra_km_rate NUMERIC(8,2) DEFAULT 12.00;`,
+        `ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS features JSONB DEFAULT '[]'::jsonb;`,
+        `ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS images JSONB DEFAULT '[]'::jsonb;`,
+        `ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS locations JSONB DEFAULT '[]'::jsonb;`,
+        `ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS status VARCHAR(100) DEFAULT 'available';`,
+        `ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS review_count INTEGER DEFAULT 0;`,
+        `ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS is_featured BOOLEAN DEFAULT false;`,
+        `ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS is_popular BOOLEAN DEFAULT false;`,
+        `ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS license_plate VARCHAR(100);`,
+      ]
+      for (const colQuery of pgCols) {
+        try { await client.query(colQuery) } catch {}
       }
 
+      // Seed default locations ONLY if locations table is completely empty
+      const locCountRes = await client.query('SELECT COUNT(*) FROM locations')
+      if (parseInt(locCountRes.rows[0].count, 10) === 0) {
+        for (const loc of DEMO_LOCATIONS) {
+          await client.query(`
+            INSERT INTO locations (
+              id, name, slug, address, description, is_active, pickup_available, return_available,
+              delivery_fee, phone, whatsapp_number, coordinates, zone, lat, lng, active, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW(), NOW())
+            ON CONFLICT (id) DO NOTHING;
+          `, [
+            String(loc.id), loc.name, loc.slug, loc.address, loc.description,
+            loc.is_active, loc.pickup_available, loc.return_available, loc.delivery_fee,
+            loc.phone, loc.whatsapp_number, JSON.stringify(loc.coordinates),
+            loc.zone, loc.coordinates.lat, loc.coordinates.lng, loc.is_active
+          ])
+        }
+      }
+
+      dbConnectionError = null
       console.log('[Database] PostgreSQL schema verified successfully.')
     } catch (err) {
-      console.warn('[Database] PostgreSQL connection error, falling back to demo mode:', err.message)
-      isMemoryFallback = true
-      activeEngine = 'memory'
+      dbConnectionError = err.message
+      console.error('[Database Connection Error]:', err.message)
+      throw err
     } finally {
       if (client) client.release()
     }
-  } else {
+  } else if (sqliteDb) {
     try {
       sqliteDb.exec(`
         CREATE TABLE IF NOT EXISTS vehicles (
@@ -385,7 +385,7 @@ async function initSchema() {
         );
       `)
 
-      // Safe column migration for SQLite if existing table was from older version
+      // Safe column migration for SQLite
       const columnsToAdd = [
         { col: 'price_daily', def: 'REAL DEFAULT 1500' },
         { col: 'price_weekend', def: 'REAL DEFAULT 1725' },
@@ -410,60 +410,57 @@ async function initSchema() {
         } catch {}
       }
 
-      // Safe location columns migration
-      const locColumns = [
-        { col: 'slug', def: 'TEXT' },
-        { col: 'address', def: 'TEXT' },
-        { col: 'description', def: 'TEXT' },
-        { col: 'is_active', def: 'INTEGER DEFAULT 1' },
-        { col: 'pickup_available', def: 'INTEGER DEFAULT 1' },
-        { col: 'return_available', def: 'INTEGER DEFAULT 1' },
-        { col: 'delivery_fee', def: 'REAL DEFAULT 0' },
-        { col: 'phone', def: 'TEXT' },
-        { col: 'whatsapp_number', def: 'TEXT' },
-        { col: 'coordinates', def: 'TEXT' },
-      ]
-
-      for (const { col, def } of locColumns) {
-        try {
-          sqliteDb.exec(`ALTER TABLE locations ADD COLUMN ${col} ${def};`)
-        } catch {}
+      // Seed locations in SQLite ONLY if table is empty
+      const locCount = sqliteDb.prepare('SELECT COUNT(*) as count FROM locations').get()
+      if (locCount && Number(locCount.count) === 0) {
+        const insertStmt = sqliteDb.prepare(`
+          INSERT OR IGNORE INTO locations (
+            id, name, slug, address, description, is_active, pickup_available, return_available,
+            delivery_fee, phone, whatsapp_number, coordinates, zone, lat, lng, active, createdAt, updatedAt
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        const now = new Date().toISOString()
+        for (const loc of DEMO_LOCATIONS) {
+          insertStmt.run(
+            String(loc.id), loc.name, loc.slug, loc.address, loc.description,
+            loc.is_active ? 1 : 0, loc.pickup_available ? 1 : 0, loc.return_available ? 1 : 0,
+            loc.delivery_fee, loc.phone, loc.whatsapp_number, JSON.stringify(loc.coordinates),
+            loc.zone, loc.coordinates.lat, loc.coordinates.lng, loc.is_active ? 1 : 0,
+            now, now
+          )
+        }
       }
 
-      // Seed missing default locations into SQLite
-      const insertStmt = sqliteDb.prepare(`
-        INSERT OR IGNORE INTO locations (
-          id, name, slug, address, description, is_active, pickup_available, return_available,
-          delivery_fee, phone, whatsapp_number, coordinates, zone, lat, lng, active, createdAt, updatedAt
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `)
-      const now = new Date().toISOString()
-      for (const loc of DEMO_LOCATIONS) {
-        insertStmt.run(
-          String(loc.id), loc.name, loc.slug, loc.address, loc.description,
-          loc.is_active ? 1 : 0, loc.pickup_available ? 1 : 0, loc.return_available ? 1 : 0,
-          loc.delivery_fee, loc.phone, loc.whatsapp_number, JSON.stringify(loc.coordinates),
-          loc.zone, loc.coordinates.lat, loc.coordinates.lng, loc.is_active ? 1 : 0,
-          now, now
-        )
-      }
-
-      console.log('[Database] SQLite schema verified successfully.')
+      dbConnectionError = null
+      console.log('[Database (Development)] SQLite schema verified successfully.')
     } catch (err) {
-      console.warn('[Database] SQLite schema error, falling back to demo mode:', err.message)
-      isMemoryFallback = true
-      activeEngine = 'memory'
+      dbConnectionError = err.message
+      console.error('[Database Error] SQLite schema error:', err.message)
+      throw err
     }
   }
 }
 
 initPromise = initSchema().catch((err) => {
-  console.error('[Database] Schema initialization error:', err)
+  console.error('[Database] Schema initialization failed:', err.message)
 })
 
 async function ensureReady() {
   if (initPromise) {
-    await initPromise
+    try {
+      await initPromise
+    } catch {
+      // Let subsequent queries check database readiness and throw appropriate errors
+    }
+  }
+}
+
+function checkConnection() {
+  if (activeEngine === 'postgres' && !pgPool) {
+    throw new Error(dbConnectionError || 'PostgreSQL database pool is not connected. Verify DATABASE_URL.')
+  }
+  if (activeEngine === 'sqlite' && !sqliteDb) {
+    throw new Error(dbConnectionError || 'SQLite database is not initialized.')
   }
 }
 
@@ -609,34 +606,39 @@ function formatSqliteLocation(row) {
 // ----------------------------------------------------------------------------
 export const appDb = {
   get engine() {
-    return isMemoryFallback ? 'memory' : activeEngine
+    return activeEngine
+  },
+
+  get dbError() {
+    return dbConnectionError
   },
 
   async isHealthy() {
     await ensureReady()
-    if (isMemoryFallback) return true
-    try {
-      if (activeEngine === 'postgres') {
+    if (activeEngine === 'postgres') {
+      if (!pgPool) return false
+      try {
         const res = await pgPool.query('SELECT 1 as healthy')
-        return res.rows.length > 0
+        return Boolean(res && res.rows && res.rows.length > 0)
+      } catch {
+        return false
       }
-      const res = sqliteDb.prepare('SELECT 1 as healthy').get()
-      return Boolean(res && res.healthy === 1)
-    } catch {
-      return false
     }
+    if (sqliteDb) {
+      try {
+        const res = sqliteDb.prepare('SELECT 1 as healthy').get()
+        return Boolean(res && res.healthy === 1)
+      } catch {
+        return false
+      }
+    }
+    return false
   },
 
   async getCounts() {
     await ensureReady()
-    if (isMemoryFallback) {
-      return {
-        vehicles: memoryStore.vehicles.length,
-        locations: memoryStore.locations.length,
-        inquiries: memoryStore.inquiries.length,
-        bookings: memoryStore.bookings.length,
-      }
-    }
+    checkConnection()
+
     if (activeEngine === 'postgres') {
       const [vRes, lRes, iRes, bRes] = await Promise.all([
         pgPool.query('SELECT COUNT(*) FROM vehicles'),
@@ -651,6 +653,7 @@ export const appDb = {
         bookings: parseInt(bRes.rows[0].count, 10),
       }
     }
+
     const v = sqliteDb.prepare('SELECT COUNT(*) as count FROM vehicles').get()
     const l = sqliteDb.prepare('SELECT COUNT(*) as count FROM locations').get()
     const i = sqliteDb.prepare('SELECT COUNT(*) as count FROM inquiries').get()
@@ -666,9 +669,8 @@ export const appDb = {
   // --- VEHICLES ---
   async getVehicles() {
     await ensureReady()
-    if (isMemoryFallback) {
-      return memoryStore.vehicles.map((v) => v.toJSON())
-    }
+    checkConnection()
+
     if (activeEngine === 'postgres') {
       const res = await pgPool.query('SELECT * FROM vehicles ORDER BY id ASC')
       return res.rows.map(formatPgVehicle)
@@ -679,13 +681,10 @@ export const appDb = {
 
   async getVehicleById(id) {
     await ensureReady()
+    checkConnection()
+
     const numericId = Number(id)
     if (isNaN(numericId)) return null
-
-    if (isMemoryFallback) {
-      const found = memoryStore.vehicles.find((v) => Number(v.id) === numericId)
-      return found ? found.toJSON() : null
-    }
 
     if (activeEngine === 'postgres') {
       const res = await pgPool.query('SELECT * FROM vehicles WHERE id = $1', [numericId])
@@ -697,14 +696,10 @@ export const appDb = {
 
   async createVehicle(data) {
     await ensureReady()
+    checkConnection()
+
     const v = new Vehicle(data)
     const now = new Date().toISOString()
-
-    if (isMemoryFallback) {
-      v.id = memoryStore.vehicles.length > 0 ? Math.max(...memoryStore.vehicles.map((x) => x.id || 0)) + 1 : 1
-      memoryStore.vehicles.push(v)
-      return v.toJSON()
-    }
 
     if (activeEngine === 'postgres') {
       const query = `
@@ -754,6 +749,8 @@ export const appDb = {
 
   async updateVehicle(id, data) {
     await ensureReady()
+    checkConnection()
+
     const numericId = Number(id)
     const existing = await this.getVehicleById(numericId)
     if (!existing) return null
@@ -764,14 +761,6 @@ export const appDb = {
       id: numericId,
     })
     const now = new Date().toISOString()
-
-    if (isMemoryFallback) {
-      const idx = memoryStore.vehicles.findIndex((v) => Number(v.id) === numericId)
-      if (idx !== -1) {
-        memoryStore.vehicles[idx] = updatedModel
-      }
-      return updatedModel.toJSON()
-    }
 
     if (activeEngine === 'postgres') {
       const query = `
@@ -829,14 +818,11 @@ export const appDb = {
 
   async deleteVehicle(id) {
     await ensureReady()
+    checkConnection()
+
     const numericId = Number(id)
     const existing = await this.getVehicleById(numericId)
     if (!existing) return null
-
-    if (isMemoryFallback) {
-      memoryStore.vehicles = memoryStore.vehicles.filter((v) => Number(v.id) !== numericId)
-      return existing
-    }
 
     if (activeEngine === 'postgres') {
       await pgPool.query('DELETE FROM vehicles WHERE id = $1', [numericId])
@@ -848,11 +834,8 @@ export const appDb = {
 
   async deleteAllVehicles() {
     await ensureReady()
-    if (isMemoryFallback) {
-      const count = memoryStore.vehicles.length
-      memoryStore.vehicles = []
-      return { success: true, deletedCount: count }
-    }
+    checkConnection()
+
     if (activeEngine === 'postgres') {
       const res = await pgPool.query('DELETE FROM vehicles RETURNING id;')
       return { success: true, deletedCount: res.rowCount }
@@ -866,10 +849,9 @@ export const appDb = {
   // --- UNAVAILABILITY & BLACKOUT BLOCKS ---
   async getUnavailabilityBlocks(vehicleId) {
     await ensureReady()
+    checkConnection()
+
     const vId = Number(vehicleId)
-    if (isMemoryFallback) {
-      return memoryStore.unavailability.filter((u) => Number(u.vehicle_id) === vId)
-    }
     if (activeEngine === 'postgres') {
       const res = await pgPool.query(
         'SELECT * FROM vehicle_unavailability WHERE vehicle_id = $1 ORDER BY start_date ASC',
@@ -885,16 +867,10 @@ export const appDb = {
 
   async createUnavailabilityBlock(blockData) {
     await ensureReady()
+    checkConnection()
+
     const block = new VehicleUnavailability(blockData)
     const now = new Date().toISOString()
-
-    if (isMemoryFallback) {
-      block.id = memoryStore.unavailability.length > 0
-        ? Math.max(...memoryStore.unavailability.map((x) => x.id || 0)) + 1
-        : 1
-      memoryStore.unavailability.push(block)
-      return block.toJSON()
-    }
 
     if (activeEngine === 'postgres') {
       const res = await pgPool.query(`
@@ -916,12 +892,9 @@ export const appDb = {
 
   async deleteUnavailabilityBlock(blockId) {
     await ensureReady()
+    checkConnection()
+
     const bId = Number(blockId)
-    if (isMemoryFallback) {
-      const found = memoryStore.unavailability.find((u) => Number(u.id) === bId)
-      memoryStore.unavailability = memoryStore.unavailability.filter((u) => Number(u.id) !== bId)
-      return found ? found.toJSON() : null
-    }
     if (activeEngine === 'postgres') {
       const res = await pgPool.query('DELETE FROM vehicle_unavailability WHERE id = $1 RETURNING *;', [bId])
       return res.rows[0] ? new VehicleUnavailability(res.rows[0]).toJSON() : null
@@ -935,9 +908,8 @@ export const appDb = {
   // --- LOCATIONS ---
   async getLocations() {
     await ensureReady()
-    if (isMemoryFallback) {
-      return memoryStore.locations.map((l) => l.toJSON())
-    }
+    checkConnection()
+
     if (activeEngine === 'postgres') {
       const res = await pgPool.query('SELECT * FROM locations ORDER BY name ASC')
       return res.rows.map(formatPgLocation)
@@ -948,11 +920,9 @@ export const appDb = {
 
   async getLocationById(id) {
     await ensureReady()
+    checkConnection()
+
     const stringId = String(id)
-    if (isMemoryFallback) {
-      const found = memoryStore.locations.find((l) => String(l.id) === stringId || String(l.slug) === stringId)
-      return found ? found.toJSON() : null
-    }
     if (activeEngine === 'postgres') {
       const res = await pgPool.query('SELECT * FROM locations WHERE id = $1 OR slug = $1', [stringId])
       return formatPgLocation(res.rows[0])
@@ -963,15 +933,12 @@ export const appDb = {
 
   async createLocation(data) {
     await ensureReady()
+    checkConnection()
+
     const loc = new Location(data)
     const now = new Date().toISOString()
     const stringId = String(loc.id || `loc_${Date.now()}`)
     loc.id = stringId
-
-    if (isMemoryFallback) {
-      memoryStore.locations.push(loc)
-      return loc.toJSON()
-    }
 
     if (activeEngine === 'postgres') {
       const query = `
@@ -1024,18 +991,14 @@ export const appDb = {
 
   async updateLocation(id, data) {
     await ensureReady()
+    checkConnection()
+
     const stringId = String(id)
     const existing = await this.getLocationById(stringId)
     if (!existing) return null
 
     const updated = new Location({ ...existing, ...data, id: stringId })
     const now = new Date().toISOString()
-
-    if (isMemoryFallback) {
-      const idx = memoryStore.locations.findIndex((l) => String(l.id) === stringId)
-      if (idx !== -1) memoryStore.locations[idx] = updated
-      return updated.toJSON()
-    }
 
     if (activeEngine === 'postgres') {
       const res = await pgPool.query(`
@@ -1074,14 +1037,11 @@ export const appDb = {
 
   async deleteLocation(id) {
     await ensureReady()
+    checkConnection()
+
     const stringId = String(id)
     const existing = await this.getLocationById(stringId)
     if (!existing) return null
-
-    if (isMemoryFallback) {
-      memoryStore.locations = memoryStore.locations.filter((l) => String(l.id) !== stringId)
-      return existing
-    }
 
     if (activeEngine === 'postgres') {
       await pgPool.query('DELETE FROM locations WHERE id = $1', [stringId])
@@ -1094,9 +1054,8 @@ export const appDb = {
   // --- INQUIRIES ---
   async getInquiries() {
     await ensureReady()
-    if (isMemoryFallback) {
-      return [...memoryStore.inquiries].reverse()
-    }
+    checkConnection()
+
     if (activeEngine === 'postgres') {
       const res = await pgPool.query('SELECT * FROM inquiries ORDER BY created_at DESC')
       return res.rows.map((r) => ({
@@ -1123,6 +1082,8 @@ export const appDb = {
 
   async createInquiry(data) {
     await ensureReady()
+    checkConnection()
+
     const id = data.id || `inq_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
     const inq = {
       id,
@@ -1140,11 +1101,6 @@ export const appDb = {
       status: String(data.status || 'New').trim(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    }
-
-    if (isMemoryFallback) {
-      memoryStore.inquiries.push(inq)
-      return inq
     }
 
     if (activeEngine === 'postgres') {
@@ -1178,16 +1134,9 @@ export const appDb = {
 
   async updateInquiry(id, data) {
     await ensureReady()
-    const now = new Date().toISOString()
-    if (isMemoryFallback) {
-      const inq = memoryStore.inquiries.find((i) => i.id === id)
-      if (!inq) return null
-      if (data.status) inq.status = data.status
-      if (data.message) inq.message = data.message
-      inq.updatedAt = now
-      return inq
-    }
+    checkConnection()
 
+    const now = new Date().toISOString()
     if (activeEngine === 'postgres') {
       const res = await pgPool.query(
         'UPDATE inquiries SET status = $1, message = $2, updated_at = $3 WHERE id = $4 RETURNING *;',
@@ -1207,11 +1156,8 @@ export const appDb = {
 
   async deleteInquiry(id) {
     await ensureReady()
-    if (isMemoryFallback) {
-      const existing = memoryStore.inquiries.find((i) => i.id === id)
-      memoryStore.inquiries = memoryStore.inquiries.filter((i) => i.id !== id)
-      return existing || null
-    }
+    checkConnection()
+
     if (activeEngine === 'postgres') {
       const res = await pgPool.query('DELETE FROM inquiries WHERE id = $1 RETURNING *;', [id])
       return res.rows[0] || null
@@ -1224,10 +1170,8 @@ export const appDb = {
 
   async resetInquiries() {
     await ensureReady()
-    if (isMemoryFallback) {
-      memoryStore.inquiries = []
-      return []
-    }
+    checkConnection()
+
     if (activeEngine === 'postgres') {
       await pgPool.query('DELETE FROM inquiries')
     } else {
@@ -1239,9 +1183,8 @@ export const appDb = {
   // --- BOOKINGS ---
   async getBookings() {
     await ensureReady()
-    if (isMemoryFallback) {
-      return [...memoryStore.bookings].reverse()
-    }
+    checkConnection()
+
     if (activeEngine === 'postgres') {
       const res = await pgPool.query('SELECT * FROM bookings ORDER BY created_at DESC')
       return res.rows
@@ -1251,10 +1194,9 @@ export const appDb = {
 
   async getBookingsForVehicle(vehicleId) {
     await ensureReady()
+    checkConnection()
+
     const vId = String(vehicleId)
-    if (isMemoryFallback) {
-      return memoryStore.bookings.filter((b) => String(b.carId || b.car_id) === vId)
-    }
     if (activeEngine === 'postgres') {
       const res = await pgPool.query(
         'SELECT * FROM bookings WHERE car_id = $1 ORDER BY pickup_date ASC',
@@ -1269,6 +1211,8 @@ export const appDb = {
 
   async createBooking(data) {
     await ensureReady()
+    checkConnection()
+
     const id = data.id || data.bookingId || `DRV-BLR-${Date.now().toString().slice(-6)}`
     const booking = {
       id,
@@ -1309,11 +1253,6 @@ export const appDb = {
       createdAt: new Date().toISOString(),
       verified_at: new Date().toISOString(),
       verifiedAt: new Date().toISOString(),
-    }
-
-    if (isMemoryFallback) {
-      memoryStore.bookings.push(booking)
-      return booking
     }
 
     if (activeEngine === 'postgres') {
@@ -1359,17 +1298,9 @@ export const appDb = {
   // --- SESSIONS ---
   async getSession(token) {
     await ensureReady()
-    if (!token) return null
+    checkConnection()
 
-    if (isMemoryFallback) {
-      const sess = memoryStore.sessions.get(token)
-      if (!sess) return null
-      if (sess.expiresAt < Date.now()) {
-        memoryStore.sessions.delete(token)
-        return null
-      }
-      return sess
-    }
+    if (!token) return null
 
     if (activeEngine === 'postgres') {
       const res = await pgPool.query('SELECT * FROM admin_sessions WHERE token = $1', [token])
@@ -1403,21 +1334,13 @@ export const appDb = {
 
   async saveSession(session) {
     await ensureReady()
+    checkConnection()
+
     const username = session.user?.username || 'admin'
     const role = session.user?.role || 'admin'
     const name = session.user?.name || 'BLR CRUIZ Admin'
     const createdAt = session.createdAt || Date.now()
     const expiresAt = session.expiresAt || (Date.now() + 24 * 60 * 60 * 1000)
-
-    if (isMemoryFallback) {
-      memoryStore.sessions.set(session.token, {
-        token: session.token,
-        user: { username, role, name },
-        createdAt,
-        expiresAt,
-      })
-      return
-    }
 
     if (activeEngine === 'postgres') {
       await pgPool.query(`
@@ -1440,11 +1363,10 @@ export const appDb = {
 
   async deleteSession(token) {
     await ensureReady()
+    checkConnection()
+
     if (!token) return
-    if (isMemoryFallback) {
-      memoryStore.sessions.delete(token)
-      return
-    }
+
     if (activeEngine === 'postgres') {
       await pgPool.query('DELETE FROM admin_sessions WHERE token = $1', [token])
     } else {

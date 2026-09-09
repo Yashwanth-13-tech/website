@@ -15,19 +15,37 @@ router.get('/health', async (req, res) => {
   )
 
   const isDbHealthy = await appDb.isHealthy()
-  const counts = await appDb.getCounts()
+  const isProduction = process.env.NODE_ENV === 'production'
 
-  return res.status(200).json({
-    status: isDbHealthy ? 'healthy' : 'degraded',
+  // In production, database must be healthy and engine must be postgres
+  const isHealthy = isDbHealthy && (!isProduction || appDb.engine === 'postgres')
+  const statusCode = isHealthy ? 200 : 503
+
+  let counts = null
+  if (isDbHealthy) {
+    try {
+      counts = await appDb.getCounts()
+    } catch {
+      counts = null
+    }
+  }
+
+  return res.status(statusCode).json({
+    status: isHealthy ? 'healthy' : 'unhealthy',
     service: 'BLR CRUIZ Express API',
-    database: isDbHealthy ? 'connected' : 'error',
+    database: isDbHealthy ? 'connected' : 'disconnected',
     engine: appDb.engine,
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'production',
-    port: process.env.PORT || 5000,
+    environment: process.env.NODE_ENV || 'development',
+    port: Number(process.env.PORT) || 5000,
     razorpayConfigured,
     razorpayMode: keyId.startsWith('rzp_live') ? 'live' : 'test',
     counts,
+    ...(isHealthy ? {} : {
+      error: isProduction && appDb.engine !== 'postgres'
+        ? 'PostgreSQL is required in production. Please configure DATABASE_URL in Render Dashboard.'
+        : (appDb.dbError || 'Database connection check failed.'),
+    }),
   })
 })
 

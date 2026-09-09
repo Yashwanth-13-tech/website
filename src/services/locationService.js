@@ -44,14 +44,18 @@ export const locationService = {
           }
           return data.locations.sort((a, b) => a.name.localeCompare(b.name))
         }
+      } else {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.message || `Failed to fetch locations (Status: ${res.status})`)
       }
     } catch (err) {
-      console.warn('[LocationService] Network notice: Using cached locations:', err.message)
+      console.warn('[LocationService] Backend query notice:', err.message)
+      const localLocations = await getAllFromStore(LOCATIONS_STORE)
+      if (localLocations && localLocations.length > 0) {
+        return localLocations.sort((a, b) => a.name.localeCompare(b.name))
+      }
+      throw err
     }
-
-    // Offline fallback to local IndexedDB store if network is temporarily unreachable
-    const localLocations = await getAllFromStore(LOCATIONS_STORE)
-    return localLocations.sort((a, b) => a.name.localeCompare(b.name))
   },
 
   /**
