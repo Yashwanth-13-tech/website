@@ -44,17 +44,18 @@ dist-ssr/
 .env.test.local
 .env.production.local
 
-# Server data
-server/bookings_data.json
-server/inquiries_data.json
-server/cars_data.json
-server/sessions_data.json
-server/data/
-data/
+# Server runtime data & SQLite databases
+server/*_data.json
+server/data/*_data.json
+server/data/*.db
+server/data/*.db-journal
+server/data/*.db-wal
+server/data/*.db-shm
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
-
-
-

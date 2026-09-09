@@ -1,6 +1,10 @@
 import dotenv from 'dotenv'
 import crypto from 'crypto'
 import Razorpay from 'razorpay'
+import appDb from './config/database.js'
+import vehicleService from './services/vehicleService.js'
+import locationService from './services/locationService.js'
+import availabilityService from './services/availabilityService.js'
 
 function parseRequestBody(req) {
   return new Promise((resolve) => {
@@ -18,6 +22,18 @@ function parseRequestBody(req) {
   })
 }
 
+function parseQueryParams(url) {
+  const query = {}
+  if (!url || !url.includes('?')) return query
+  const search = url.split('?')[1]
+  const pairs = search.split('&')
+  for (const pair of pairs) {
+    const [k, v] = pair.split('=')
+    if (k) query[decodeURIComponent(k)] = decodeURIComponent(v || '')
+  }
+  return query
+}
+
 function sendJson(res, statusCode, data) {
   res.statusCode = statusCode
   res.setHeader('Content-Type', 'application/json')
@@ -25,9 +41,7 @@ function sendJson(res, statusCode, data) {
 }
 
 function getEnvCredentials() {
-  // Dynamically re-read .env if changed
   dotenv.config()
-
   const keyId = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || ''
   const keySecret = process.env.RAZORPAY_KEY_SECRET || ''
 
@@ -42,16 +56,31 @@ function getEnvCredentials() {
   return { keyId, keySecret, isConfigured }
 }
 
-// In-memory active authenticated admin sessions store
 const activeAdminSessions = new Map()
+
+async function getAdminSession(req) {
+  const authHeader = req.headers['authorization'] || ''
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+  if (!token) return null
+
+  const session = activeAdminSessions.get(token) || await appDb.getSession(token)
+  if (!session) return null
+  if (session.expiresAt < Date.now()) {
+    activeAdminSessions.delete(token)
+    await appDb.deleteSession(token)
+    return null
+  }
+  return session
+}
 
 export function razorpayApiPlugin() {
   return {
     name: 'drivora-razorpay-api',
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
-        const url = req.url ? req.url.split('?')[0] : ''
-        const { appDb } = await import('./db/database.js')
+        const fullUrl = req.url || ''
+        const url = fullUrl.split('?')[0]
+        const queryParams = parseQueryParams(fullUrl)
 
         // --- Admin Authentication API Endpoints ---
         if (url === '/api/auth/login' && req.method === 'POST') {
@@ -68,8 +97,8 @@ export function razorpayApiPlugin() {
 
             dotenv.config()
             const expectedUser = (process.env.ADMIN_USER || 'admin').trim().toLowerCase()
-            const expectedHash = (process.env.ADMIN_PASS_HASH || 'e6da472f83d28c8486bb5e8abe2c10d76897294298881cf3162cc5569ccc0f22').trim().toLowerCase() // blrcruiz2026
-            const legacyHash = 'f85272fddc0c3b00ed844917959969d23453597e2b2a4662120984ee79947c3e' // drivora2026
+            const expectedHash = (process.env.ADMIN_PASS_HASH || 'e6da472f83d28c8486bb5e8abe2c10d76897294298881cf3162cc5569ccc0f22').trim().toLowerCase()
+            const legacyHash = 'f85272fddc0c3b00ed844917959969d23453597e2b2a4662120984ee79947c3e'
 
             const inputUser = String(username).trim().toLowerCase()
             const inputPass = String(password).trim()
@@ -89,7 +118,6 @@ export function razorpayApiPlugin() {
               })
             }
 
-            // Generate secure 256-bit cryptographically random token
             const token = 'adm_' + crypto.randomBytes(32).toString('hex')
             const sessionData = {
               user: {
@@ -99,7 +127,7 @@ export function razorpayApiPlugin() {
               },
               token,
               createdAt: Date.now(),
-              expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
+              expiresAt: Date.now() + 24 * 60 * 60 * 1000,
             }
 
             activeAdminSessions.set(token, sessionData)
@@ -122,25 +150,12 @@ export function razorpayApiPlugin() {
 
         if (url === '/api/auth/verify' && (req.method === 'GET' || req.method === 'POST')) {
           try {
-            const authHeader = req.headers['authorization'] || ''
-            const token = authHeader.replace(/^Bearer\s+/i, '').trim()
-
-            const session = token ? (activeAdminSessions.get(token) || await appDb.getSession(token)) : null
+            const session = await getAdminSession(req)
             if (!session) {
               return sendJson(res, 401, {
                 success: false,
                 valid: false,
                 message: 'Unauthorized. Invalid or missing admin token.',
-              })
-            }
-
-            if (session.expiresAt < Date.now()) {
-              activeAdminSessions.delete(token)
-              await appDb.deleteSession(token)
-              return sendJson(res, 401, {
-                success: false,
-                valid: false,
-                message: 'Session expired. Please log in again.',
               })
             }
 
@@ -176,11 +191,13 @@ export function razorpayApiPlugin() {
         }
 
         if (url === '/api/health' && req.method === 'GET') {
-          const { isConfigured } = getEnvCredentials()
+          const isHealthy = await appDb.isHealthy()
+          const counts = await appDb.getCounts()
           return sendJson(res, 200, {
-            status: 'healthy',
+            status: isHealthy ? 'healthy' : 'degraded',
+            engine: appDb.engine,
             timestamp: new Date().toISOString(),
-            razorpayConfigured: isConfigured,
+            counts,
           })
         }
 
@@ -235,7 +252,7 @@ export function razorpayApiPlugin() {
               return sendJson(res, 400, {
                 success: false,
                 message:
-                  'Razorpay credentials are not yet configured in your .env file. Please create a .env file with RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to enable online payments.',
+                  'Razorpay credentials are not yet configured in your .env file.',
                 isConfigured: false,
               })
             }
@@ -282,7 +299,6 @@ export function razorpayApiPlugin() {
               },
             })
           } catch (err) {
-            console.error('[Razorpay Order Creation Error]:', err.message)
             return sendJson(res, 500, {
               success: false,
               message: err.message || 'Failed to create Razorpay order.',
@@ -303,12 +319,11 @@ export function razorpayApiPlugin() {
             if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
               return sendJson(res, 400, {
                 success: false,
-                message: 'Missing Razorpay verification parameters (order_id, payment_id, signature).',
+                message: 'Missing Razorpay verification parameters.',
               })
             }
 
             const { keySecret } = getEnvCredentials()
-
             if (!keySecret) {
               return sendJson(res, 500, {
                 success: false,
@@ -370,35 +385,138 @@ export function razorpayApiPlugin() {
           }
         }
 
-        // --- Cars Inventory API Endpoints ---
-        if (url === '/api/cars' && req.method === 'GET') {
-          const cars = await appDb.getVehicles()
+        // --- Admin Dashboard Stats Endpoint ---
+        if (url === '/api/admin/stats' && req.method === 'GET') {
+          const session = await getAdminSession(req)
+          if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
+          const counts = await appDb.getCounts()
+          const allVehicles = await appDb.getVehicles()
+          const allLocations = await appDb.getLocations()
+          const statusCounts = { available: 0, booked: 0, maintenance: 0, inactive: 0 }
+          for (const v of allVehicles) {
+            const s = v.status || 'available'
+            statusCounts[s] = (statusCounts[s] || 0) + 1
+          }
           return sendJson(res, 200, {
             success: true,
-            count: cars.length,
             engine: appDb.engine,
-            cars,
+            stats: {
+              total_vehicles: counts.vehicles,
+              total_locations: counts.locations,
+              total_inquiries: counts.inquiries,
+              total_bookings: counts.bookings,
+              active_locations: allLocations.filter((l) => l.is_active).length,
+              vehicles_by_status: statusCounts,
+            },
           })
         }
 
-        if (url.startsWith('/api/cars/') && req.method === 'GET') {
-          const id = url.replace('/api/cars/', '')
-          const car = await appDb.getVehicleById(id)
-          if (!car) {
-            return sendJson(res, 404, { success: false, message: 'Vehicle not found' })
-          }
-          return sendJson(res, 200, { success: true, car })
+        // --- Vehicles & Cars Specialized Endpoints ---
+        if ((url === '/api/vehicles/featured' || url === '/api/cars/featured') && req.method === 'GET') {
+          const limit = queryParams.limit || 8
+          const featured = await vehicleService.getFeaturedVehicles(limit)
+          return sendJson(res, 200, { success: true, count: featured.length, vehicles: featured, cars: featured })
         }
 
-        if (url === '/api/cars/sync' && req.method === 'POST') {
+        if ((url === '/api/vehicles/popular' || url === '/api/cars/popular') && req.method === 'GET') {
+          const limit = queryParams.limit || 8
+          const popular = await vehicleService.getPopularVehicles(limit)
+          return sendJson(res, 200, { success: true, count: popular.length, vehicles: popular, cars: popular })
+        }
+
+        if ((url === '/api/vehicles/availability' || url === '/api/cars/availability') && req.method === 'GET') {
+          const pickupDate = queryParams.pickup_date || queryParams.pickupDate
+          const returnDate = queryParams.return_date || queryParams.returnDate
+          const result = await vehicleService.getVehicles({
+            ...queryParams,
+            pickup_date: pickupDate,
+            return_date: returnDate,
+            status: queryParams.status || 'available',
+          })
+          return sendJson(res, 200, { success: true, ...result })
+        }
+
+        if ((url === '/api/vehicles/meta/categories' || url === '/api/cars/meta/categories') && req.method === 'GET') {
+          const categories = await vehicleService.getCategoriesMeta()
+          return sendJson(res, 200, { success: true, categories })
+        }
+
+        // Unavailable dates for vehicle
+        const unavailMatch = url.match(/^\/api\/(vehicles|cars)\/([^/]+)\/unavailable-dates$/)
+        if (unavailMatch && req.method === 'GET') {
+          const vehicleId = unavailMatch[2]
+          const dates = await availabilityService.getUnavailableDates(vehicleId, queryParams.month, queryParams.year)
+          return sendJson(res, 200, { success: true, vehicle_id: Number(vehicleId), unavailable_dates: dates })
+        }
+
+        // Check availability for single vehicle
+        const availCheckMatch = url.match(/^\/api\/(vehicles|cars)\/([^/]+)\/availability$/)
+        if (availCheckMatch && req.method === 'GET') {
+          const vehicleId = availCheckMatch[2]
+          const pickupDate = queryParams.pickup_date || queryParams.pickupDate
+          const returnDate = queryParams.return_date || queryParams.returnDate
+          const check = await availabilityService.isVehicleAvailable(vehicleId, pickupDate, returnDate)
+          return sendJson(res, 200, { success: true, vehicle_id: Number(vehicleId), ...check })
+        }
+
+        // Unavailability blocks routes
+        const blocksMatch = url.match(/^\/api\/(vehicles|cars|admin\/vehicles)\/([^/]+)\/blocks$/)
+        if (blocksMatch && req.method === 'GET') {
+          const vehicleId = blocksMatch[2]
+          const blocks = await appDb.getUnavailabilityBlocks(vehicleId)
+          return sendJson(res, 200, { success: true, vehicle_id: Number(vehicleId), count: blocks.length, blocks })
+        }
+
+        const blockAddMatch = url.match(/^\/api\/(vehicles|cars|admin\/vehicles)\/([^/]+)\/block$/)
+        if (blockAddMatch && req.method === 'POST') {
+          const session = await getAdminSession(req)
+          if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
+          const vehicleId = blockAddMatch[2]
+          const body = await parseRequestBody(req)
+          const block = await availabilityService.addVehicleBlock(vehicleId, body)
+          return sendJson(res, 201, { success: true, message: 'Block added', block })
+        }
+
+        const blockDelMatch = url.match(/^\/api\/(vehicles|cars|admin\/vehicles)\/blocks\/([^/]+)$/)
+        if (blockDelMatch && req.method === 'DELETE') {
+          const session = await getAdminSession(req)
+          if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
+          const blockId = blockDelMatch[2]
+          const deleted = await availabilityService.removeVehicleBlock(blockId)
+          return sendJson(res, 200, { success: true, message: 'Block removed', block: deleted })
+        }
+
+        // Patch vehicle status
+        const statusPatchMatch = url.match(/^\/api\/(vehicles|cars|admin\/vehicles)\/([^/]+)\/status$/)
+        if (statusPatchMatch && req.method === 'PATCH') {
+          const session = await getAdminSession(req)
+          if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
+          const id = statusPatchMatch[2]
+          const body = await parseRequestBody(req)
+          const updated = await vehicleService.updateVehicleStatus(id, body.status)
+          return sendJson(res, 200, { success: true, message: 'Status updated', vehicle: updated, car: updated })
+        }
+
+        // --- Base Vehicles & Cars API Endpoints ---
+        if ((url === '/api/vehicles' || url === '/api/cars' || url === '/api/admin/vehicles') && req.method === 'GET') {
+          const result = await vehicleService.getVehicles(queryParams)
+          return sendJson(res, 200, {
+            success: true,
+            engine: appDb.engine,
+            ...result,
+          })
+        }
+
+        if ((url === '/api/vehicles/sync' || url === '/api/cars/sync') && req.method === 'POST') {
           try {
             const body = await parseRequestBody(req)
-            const { cars = [] } = body
+            const { cars = [], vehicles = [] } = body
+            const inputList = vehicles.length > 0 ? vehicles : cars
             const currentCars = await appDb.getVehicles()
             let count = 0
-            for (const c of cars) {
+            for (const c of inputList) {
               if (c && c.brand && c.model && !currentCars.some((x) => String(x.id) === String(c.id))) {
-                await appDb.createVehicle(c)
+                await vehicleService.createVehicle(c)
                 count++
               }
             }
@@ -406,6 +524,7 @@ export function razorpayApiPlugin() {
             return sendJson(res, 200, {
               success: true,
               restoredCount: count,
+              vehicles: updatedCars,
               cars: updatedCars,
             })
           } catch (err) {
@@ -413,278 +532,161 @@ export function razorpayApiPlugin() {
           }
         }
 
-        if (url === '/api/cars' && req.method === 'POST') {
+        if ((url === '/api/vehicles' || url === '/api/cars' || url === '/api/admin/vehicles') && req.method === 'POST') {
           try {
-            const authHeader = req.headers['authorization'] || ''
-            const token = authHeader.replace(/^Bearer\s+/i, '').trim()
-            const session = token ? (activeAdminSessions.get(token) || await appDb.getSession(token)) : null
-            if (!session) {
-              return sendJson(res, 401, { success: false, message: 'Unauthorized. Admin token required.' })
-            }
-
+            const session = await getAdminSession(req)
+            if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
             const data = await parseRequestBody(req)
             if (!data.brand || !data.model) {
-              return sendJson(res, 400, { success: false, message: 'Vehicle brand and model are required.' })
+              return sendJson(res, 400, { success: false, message: 'Brand and model required' })
             }
-
-            const newCar = await appDb.createVehicle(data)
-            return sendJson(res, 201, { success: true, car: newCar })
+            const newVehicle = await vehicleService.createVehicle(data)
+            return sendJson(res, 201, { success: true, vehicle: newVehicle, car: newVehicle })
           } catch (err) {
             return sendJson(res, 500, { success: false, message: err.message })
           }
         }
 
-        if ((url === '/api/cars/all' || url === '/api/cars/delete-all') && (req.method === 'DELETE' || req.method === 'POST')) {
-          try {
-            const authHeader = req.headers['authorization'] || ''
-            const token = authHeader.replace(/^Bearer\s+/i, '').trim()
-            const session = token ? (activeAdminSessions.get(token) || await appDb.getSession(token)) : null
-            if (!session) {
-              return sendJson(res, 401, { success: false, message: 'Unauthorized. Admin token required.' })
-            }
-
-            const result = await appDb.deleteAllVehicles()
-            return sendJson(res, 200, {
-              success: true,
-              message: `Successfully deleted all ${result.deletedCount} vehicles.`,
-              deletedCount: result.deletedCount,
-              cars: [],
-            })
-          } catch (err) {
-            return sendJson(res, 500, { success: false, message: err.message })
+        if ((url.endsWith('/all') || url.endsWith('/delete-all')) && (req.method === 'DELETE' || req.method === 'POST')) {
+          if (url.includes('vehicles') || url.includes('cars')) {
+            const session = await getAdminSession(req)
+            if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
+            const result = await vehicleService.deleteAllVehicles()
+            return sendJson(res, 200, { success: true, deletedCount: result.deletedCount, vehicles: [], cars: [] })
           }
         }
 
-        if (url.startsWith('/api/cars/') && req.method === 'DELETE') {
-          try {
-            const authHeader = req.headers['authorization'] || ''
-            const token = authHeader.replace(/^Bearer\s+/i, '').trim()
-            const session = token ? (activeAdminSessions.get(token) || await appDb.getSession(token)) : null
-            if (!session) {
-              return sendJson(res, 401, { success: false, message: 'Unauthorized. Admin token required.' })
+        // Single Vehicle Detail / Update / Delete
+        const singleVehicleMatch = url.match(/^\/api\/(vehicles|cars|admin\/vehicles)\/([^/]+)$/)
+        if (singleVehicleMatch) {
+          const id = singleVehicleMatch[2]
+          if (id !== 'sync' && id !== 'all' && id !== 'delete-all' && id !== 'featured' && id !== 'popular' && id !== 'availability') {
+            if (req.method === 'GET') {
+              const car = await vehicleService.getVehicleById(id)
+              if (!car) return sendJson(res, 404, { success: false, message: 'Vehicle not found' })
+              return sendJson(res, 200, { success: true, vehicle: car, car })
             }
 
-            const id = url.replace('/api/cars/', '')
-            if (id === 'all') {
-              const result = await appDb.deleteAllVehicles()
-              return sendJson(res, 200, {
-                success: true,
-                message: `Successfully deleted all ${result.deletedCount} vehicles.`,
-                deletedCount: result.deletedCount,
-                cars: [],
-              })
+            if (req.method === 'PUT') {
+              const session = await getAdminSession(req)
+              if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
+              const updateData = await parseRequestBody(req)
+              const updated = await vehicleService.updateVehicle(id, updateData)
+              if (!updated) return sendJson(res, 404, { success: false, message: 'Vehicle not found' })
+              return sendJson(res, 200, { success: true, vehicle: updated, car: updated })
             }
 
-            const deleted = await appDb.deleteVehicle(id)
-            if (!deleted) {
-              return sendJson(res, 404, { success: false, message: 'Vehicle not found or already deleted.' })
+            if (req.method === 'DELETE') {
+              const session = await getAdminSession(req)
+              if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
+              const deleted = await vehicleService.deleteVehicle(id)
+              if (!deleted) return sendJson(res, 404, { success: false, message: 'Vehicle not found' })
+              return sendJson(res, 200, { success: true, vehicle: deleted, car: deleted })
             }
-            return sendJson(res, 200, { success: true, car: deleted })
-          } catch (err) {
-            return sendJson(res, 500, { success: false, message: err.message })
-          }
-        }
-
-        if (url.startsWith('/api/cars/') && req.method === 'PUT') {
-          try {
-            const authHeader = req.headers['authorization'] || ''
-            const token = authHeader.replace(/^Bearer\s+/i, '').trim()
-            const session = token ? (activeAdminSessions.get(token) || await appDb.getSession(token)) : null
-            if (!session) {
-              return sendJson(res, 401, { success: false, message: 'Unauthorized. Admin token required.' })
-            }
-
-            const id = url.replace('/api/cars/', '')
-            const updateData = await parseRequestBody(req)
-            const updated = await appDb.updateVehicle(id, updateData)
-            if (!updated) {
-              return sendJson(res, 404, { success: false, message: 'Vehicle not found.' })
-            }
-            return sendJson(res, 200, { success: true, car: updated })
-          } catch (err) {
-            return sendJson(res, 500, { success: false, message: err.message })
           }
         }
 
         // --- Locations API Endpoints ---
-        if (url === '/api/locations' && req.method === 'GET') {
-          try {
-            const locations = await appDb.getLocations()
-            return sendJson(res, 200, { success: true, count: locations.length, locations })
-          } catch (err) {
-            return sendJson(res, 500, { success: false, message: err.message })
-          }
+        if ((url === '/api/locations' || url === '/api/admin/locations') && req.method === 'GET') {
+          const includeInactive = queryParams.include_inactive === 'true' || queryParams.all === 'true' || url.includes('/admin/')
+          const locations = includeInactive
+            ? await locationService.getAllLocations()
+            : await locationService.getActiveLocations()
+          return sendJson(res, 200, { success: true, count: locations.length, engine: appDb.engine, locations })
         }
 
-        if (url.startsWith('/api/locations/') && req.method === 'GET') {
-          try {
-            const id = url.replace('/api/locations/', '')
-            const location = await appDb.getLocationById(id)
-            if (!location) {
-              return sendJson(res, 404, { success: false, message: 'Location not found' })
-            }
-            return sendJson(res, 200, { success: true, location })
-          } catch (err) {
-            return sendJson(res, 500, { success: false, message: err.message })
-          }
+        if (url === '/api/locations/all' && req.method === 'GET') {
+          const locations = await locationService.getAllLocations()
+          return sendJson(res, 200, { success: true, count: locations.length, engine: appDb.engine, locations })
         }
 
-        if (url === '/api/locations' && req.method === 'POST') {
-          try {
-            const authHeader = req.headers['authorization'] || ''
-            const token = authHeader.replace(/^Bearer\s+/i, '').trim()
-            const session = token ? (activeAdminSessions.get(token) || await appDb.getSession(token)) : null
-            if (!session) {
-              return sendJson(res, 401, { success: false, message: 'Unauthorized. Admin token required.' })
-            }
-
-            const data = await parseRequestBody(req)
-            if (!data.name || !data.name.trim()) {
-              return sendJson(res, 400, { success: false, message: 'Location name is required.' })
-            }
-
-            const newLocation = await appDb.createLocation(data)
-            return sendJson(res, 201, { success: true, location: newLocation })
-          } catch (err) {
-            return sendJson(res, 500, { success: false, message: err.message })
-          }
+        if ((url === '/api/locations' || url === '/api/admin/locations') && req.method === 'POST') {
+          const session = await getAdminSession(req)
+          if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
+          const data = await parseRequestBody(req)
+          if (!data.name) return sendJson(res, 400, { success: false, message: 'Location name required' })
+          const newLoc = await locationService.createLocation(data)
+          return sendJson(res, 201, { success: true, location: newLoc })
         }
 
-        if (url.startsWith('/api/locations/') && req.method === 'PUT') {
-          try {
-            const authHeader = req.headers['authorization'] || ''
-            const token = authHeader.replace(/^Bearer\s+/i, '').trim()
-            const session = token ? (activeAdminSessions.get(token) || await appDb.getSession(token)) : null
-            if (!session) {
-              return sendJson(res, 401, { success: false, message: 'Unauthorized. Admin token required.' })
+        const singleLocMatch = url.match(/^\/api\/(locations|admin\/locations)\/([^/]+)$/)
+        if (singleLocMatch) {
+          const target = singleLocMatch[2]
+          if (target !== 'all') {
+            if (req.method === 'GET') {
+              const location = await locationService.getLocationBySlugOrId(target)
+              if (!location) return sendJson(res, 404, { success: false, message: 'Location not found' })
+              return sendJson(res, 200, { success: true, location })
             }
 
-            const id = url.replace('/api/locations/', '')
-            const data = await parseRequestBody(req)
-            const updated = await appDb.updateLocation(id, data)
-            if (!updated) {
-              return sendJson(res, 404, { success: false, message: 'Location not found.' })
-            }
-            return sendJson(res, 200, { success: true, location: updated })
-          } catch (err) {
-            return sendJson(res, 500, { success: false, message: err.message })
-          }
-        }
-
-        if (url.startsWith('/api/locations/') && req.method === 'DELETE') {
-          try {
-            const authHeader = req.headers['authorization'] || ''
-            const token = authHeader.replace(/^Bearer\s+/i, '').trim()
-            const session = token ? (activeAdminSessions.get(token) || await appDb.getSession(token)) : null
-            if (!session) {
-              return sendJson(res, 401, { success: false, message: 'Unauthorized. Admin token required.' })
+            if (req.method === 'PUT') {
+              const session = await getAdminSession(req)
+              if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
+              const updateData = await parseRequestBody(req)
+              const updated = await locationService.updateLocation(target, updateData)
+              if (!updated) return sendJson(res, 404, { success: false, message: 'Location not found' })
+              return sendJson(res, 200, { success: true, location: updated })
             }
 
-            const id = url.replace('/api/locations/', '')
-            const deleted = await appDb.deleteLocation(id)
-            if (!deleted) {
-              return sendJson(res, 404, { success: false, message: 'Location not found.' })
+            if (req.method === 'DELETE') {
+              const session = await getAdminSession(req)
+              if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
+              const deleted = await locationService.deleteLocation(target)
+              if (!deleted) return sendJson(res, 404, { success: false, message: 'Location not found' })
+              return sendJson(res, 200, { success: true, location: deleted })
             }
-            return sendJson(res, 200, { success: true, location: deleted })
-          } catch (err) {
-            return sendJson(res, 500, { success: false, message: err.message })
           }
         }
 
         // --- Inquiries API Endpoints ---
         if (url === '/api/inquiries' && req.method === 'GET') {
-          try {
-            const inquiries = await appDb.getInquiries()
-            return sendJson(res, 200, { success: true, inquiries })
-          } catch (err) {
-            return sendJson(res, 500, { success: false, message: err.message })
-          }
+          const inquiries = await appDb.getInquiries()
+          return sendJson(res, 200, { success: true, count: inquiries.length, inquiries })
         }
 
         if (url === '/api/inquiries' && req.method === 'POST') {
-          try {
-            const data = await parseRequestBody(req)
-            if (!data.name || !data.phone) {
-              return sendJson(res, 400, { success: false, message: 'Customer name and phone are required.' })
-            }
-            const newInq = await appDb.createInquiry(data)
-            return sendJson(res, 201, { success: true, inquiry: newInq })
-          } catch (err) {
-            return sendJson(res, 500, { success: false, message: err.message })
+          const data = await parseRequestBody(req)
+          if (!data.name || !data.phone) {
+            return sendJson(res, 400, { success: false, message: 'Name and phone required' })
           }
+          const newInq = await appDb.createInquiry(data)
+          return sendJson(res, 201, { success: true, inquiry: newInq })
         }
 
-        if (url.startsWith('/api/inquiries/') && req.method === 'PUT') {
-          try {
-            const authHeader = req.headers['authorization'] || ''
-            const token = authHeader.replace(/^Bearer\s+/i, '').trim()
-            const session = token ? (activeAdminSessions.get(token) || await appDb.getSession(token)) : null
-            if (!session) {
-              return sendJson(res, 401, { success: false, message: 'Unauthorized. Admin token required.' })
-            }
+        const singleInqMatch = url.match(/^\/api\/inquiries\/([^/]+)$/)
+        if (singleInqMatch) {
+          const id = singleInqMatch[1]
+          if (id === 'reset' && req.method === 'POST') {
+            const session = await getAdminSession(req)
+            if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
+            await appDb.resetInquiries()
+            return sendJson(res, 200, { success: true, message: 'Inquiries reset', inquiries: [] })
+          }
 
-            const id = url.replace('/api/inquiries/', '')
+          if (req.method === 'PUT') {
+            const session = await getAdminSession(req)
+            if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
             const data = await parseRequestBody(req)
             const updated = await appDb.updateInquiry(id, data)
-            if (!updated) {
-              return sendJson(res, 404, { success: false, message: 'Inquiry not found.' })
-            }
+            if (!updated) return sendJson(res, 404, { success: false, message: 'Inquiry not found' })
             return sendJson(res, 200, { success: true, inquiry: updated })
-          } catch (err) {
-            return sendJson(res, 500, { success: false, message: err.message })
           }
-        }
 
-        if (url.startsWith('/api/inquiries/') && req.method === 'DELETE') {
-          try {
-            const authHeader = req.headers['authorization'] || ''
-            const token = authHeader.replace(/^Bearer\s+/i, '').trim()
-            const session = token ? (activeAdminSessions.get(token) || await appDb.getSession(token)) : null
-            if (!session) {
-              return sendJson(res, 401, { success: false, message: 'Unauthorized. Admin token required.' })
-            }
-
-            const id = url.replace('/api/inquiries/', '')
+          if (req.method === 'DELETE') {
+            const session = await getAdminSession(req)
+            if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
             const deleted = await appDb.deleteInquiry(id)
-            if (!deleted) {
-              return sendJson(res, 404, { success: false, message: 'Inquiry not found.' })
-            }
+            if (!deleted) return sendJson(res, 404, { success: false, message: 'Inquiry not found' })
             return sendJson(res, 200, { success: true, inquiry: deleted })
-          } catch (err) {
-            return sendJson(res, 500, { success: false, message: err.message })
           }
         }
 
-        if (url === '/api/inquiries/reset' && req.method === 'POST') {
-          try {
-            const authHeader = req.headers['authorization'] || ''
-            const token = authHeader.replace(/^Bearer\s+/i, '').trim()
-            const session = token ? (activeAdminSessions.get(token) || await appDb.getSession(token)) : null
-            if (!session) {
-              return sendJson(res, 401, { success: false, message: 'Unauthorized. Admin token required.' })
-            }
-
-            await appDb.resetInquiries()
-            return sendJson(res, 200, { success: true, message: 'Inquiries reset.', inquiries: [] })
-          } catch (err) {
-            return sendJson(res, 500, { success: false, message: err.message })
-          }
-        }
-
+        // --- Bookings API Endpoints ---
         if (url === '/api/bookings' && req.method === 'GET') {
-          try {
-            const authHeader = req.headers['authorization'] || ''
-            const token = authHeader.replace(/^Bearer\s+/i, '').trim()
-            const session = token ? (activeAdminSessions.get(token) || await appDb.getSession(token)) : null
-            if (!session) {
-              return sendJson(res, 401, { success: false, message: 'Unauthorized. Admin token required.' })
-            }
-
-            const bookings = await appDb.getBookings()
-            return sendJson(res, 200, { success: true, count: bookings.length, bookings })
-          } catch (err) {
-            return sendJson(res, 500, { success: false, message: err.message })
-          }
+          const session = await getAdminSession(req)
+          if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
+          const bookings = await appDb.getBookings()
+          return sendJson(res, 200, { success: true, count: bookings.length, bookings })
         }
 
         next()
@@ -692,3 +694,5 @@ export function razorpayApiPlugin() {
     },
   }
 }
+
+export default razorpayApiPlugin

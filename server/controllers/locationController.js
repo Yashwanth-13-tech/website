@@ -1,12 +1,23 @@
 import appDb from '../config/database.js'
+import locationService from '../services/locationService.js'
 
 export const locationController = {
+  /**
+   * GET /api/locations
+   * Returns active locations for public booking and pickers.
+   * If include_inactive=true, returns all locations.
+   */
   async getAllLocations(req, res) {
     try {
-      const locations = await appDb.getLocations()
+      const includeInactive = req.query.include_inactive === 'true' || req.query.all === 'true'
+      const locations = includeInactive
+        ? await locationService.getAllLocations()
+        : await locationService.getActiveLocations()
+
       return res.status(200).json({
         success: true,
         count: locations.length,
+        engine: appDb.engine,
         locations,
       })
     } catch (err) {
@@ -18,16 +29,44 @@ export const locationController = {
     }
   },
 
+  /**
+   * GET /api/locations/all
+   * Admin view: Returns all locations including inactive.
+   */
+  async getAllLocationsAdmin(req, res) {
+    try {
+      const locations = await locationService.getAllLocations()
+      return res.status(200).json({
+        success: true,
+        count: locations.length,
+        engine: appDb.engine,
+        locations,
+      })
+    } catch (err) {
+      console.error('[LocationController getAllLocationsAdmin Error]:', err)
+      return res.status(500).json({
+        success: false,
+        message: err.message || 'Failed to fetch all locations.',
+      })
+    }
+  },
+
+  /**
+   * GET /api/locations/:slug (or :id)
+   */
   async getLocationById(req, res) {
     try {
-      const { id } = req.params
-      const location = await appDb.getLocationById(id)
+      const { id, slug } = req.params
+      const target = slug || id
+      const location = await locationService.getLocationBySlugOrId(target)
+
       if (!location) {
         return res.status(404).json({
           success: false,
-          message: `Location with ID ${id} not found.`,
+          message: `Location '${target}' not found.`,
         })
       }
+
       return res.status(200).json({
         success: true,
         location,
@@ -41,6 +80,9 @@ export const locationController = {
     }
   },
 
+  /**
+   * POST /api/locations
+   */
   async createLocation(req, res) {
     try {
       const data = req.body || {}
@@ -51,7 +93,7 @@ export const locationController = {
         })
       }
 
-      const newLocation = await appDb.createLocation(data)
+      const newLocation = await locationService.createLocation(data)
       console.log(`[Location Created] ID ${newLocation.id}: ${newLocation.name} in database (${appDb.engine})`)
 
       return res.status(201).json({
@@ -68,10 +110,13 @@ export const locationController = {
     }
   },
 
+  /**
+   * PUT /api/locations/:id
+   */
   async updateLocation(req, res) {
     try {
       const { id } = req.params
-      const updatedLocation = await appDb.updateLocation(id, req.body)
+      const updatedLocation = await locationService.updateLocation(id, req.body)
 
       if (!updatedLocation) {
         return res.status(404).json({
@@ -96,10 +141,13 @@ export const locationController = {
     }
   },
 
+  /**
+   * DELETE /api/locations/:id
+   */
   async deleteLocation(req, res) {
     try {
       const { id } = req.params
-      const deletedLocation = await appDb.deleteLocation(id)
+      const deletedLocation = await locationService.deleteLocation(id)
 
       if (!deletedLocation) {
         return res.status(404).json({

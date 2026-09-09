@@ -6,7 +6,8 @@ const router = express.Router()
 
 // Public routes
 router.get('/', locationController.getAllLocations)
-router.get('/:id', locationController.getLocationById)
+router.get('/all', locationController.getAllLocationsAdmin)
+router.get('/:slug', locationController.getLocationById)
 
 // Admin protected routes
 router.post('/', verifyAdminAuth, locationController.createLocation)

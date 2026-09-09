@@ -16,6 +16,7 @@ import appDb from './config/database.js'
 import authRoutes from './routes/authRoutes.js'
 import vehicleRoutes from './routes/vehicleRoutes.js'
 import locationRoutes from './routes/locationRoutes.js'
+import adminRoutes from './routes/adminRoutes.js'
 import inquiryRoutes from './routes/inquiryRoutes.js'
 import paymentRoutes from './routes/paymentRoutes.js'
 import healthRoutes from './routes/healthRoutes.js'
@@ -40,8 +41,10 @@ app.use('/api', (req, res, next) => {
 
 // --- Mount Modular API Endpoints ---
 app.use('/api/auth', authRoutes)
-app.use('/api/cars', vehicleRoutes)
+app.use('/api/vehicles', vehicleRoutes)
+app.use('/api/cars', vehicleRoutes) // backward-compatible alias
 app.use('/api/locations', locationRoutes)
+app.use('/api/admin', adminRoutes)
 app.use('/api/inquiries', inquiryRoutes)
 app.use('/api', paymentRoutes)
 app.use('/api', healthRoutes)
