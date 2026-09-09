@@ -192,11 +192,17 @@ export default function AdminDashboard({ setActiveTab }) {
               cars.slice(0, 5).map((car) => (
                 <div key={car.id} className="flex items-center justify-between py-3">
                   <div className="flex items-center gap-3">
-                    <img
-                      src={car.image}
-                      alt={car.model}
-                      className="h-12 w-16 rounded-xl object-cover ring-1 ring-charcoal-900/10"
-                    />
+                    <div className="relative w-20 aspect-[16/9] shrink-0 overflow-hidden rounded-xl bg-charcoal-100 ring-1 ring-charcoal-900/10">
+                      <img
+                        src={car.image}
+                        alt={car.model}
+                        className="h-full w-full object-cover object-center"
+                        onError={(e) => {
+                          e.currentTarget.onerror = null
+                          e.currentTarget.src = 'https://images.unsplash.com/photo-1617469767053-d3b523a0b982?auto=format&fit=crop&w=800&q=80'
+                        }}
+                      />
+                    </div>
                     <div>
                       <p className="font-display text-sm font-bold text-charcoal-900">
                         {car.brand} {car.model}

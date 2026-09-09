@@ -105,8 +105,8 @@ const CarCard = memo(function CarCard({
         willChange: isInView ? 'auto' : 'opacity, transform',
       }}
     >
-      {/* Top Image Preview Box with Prominent Larger Height & Cross-Fade Slideshow */}
-      <div className="relative h-60 sm:h-64 md:h-72 w-full overflow-hidden bg-slate-100">
+      {/* Top Image Preview Box with Standardized 16:9 Ratio & Cross-Fade Slideshow */}
+      <div className="relative w-full aspect-[16/9] overflow-hidden bg-slate-100">
         {images.map((imgSrc, idx) => (
           <img
             key={`${imgSrc}-${idx}`}

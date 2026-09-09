@@ -4,7 +4,7 @@ export default function CarCardSkeleton() {
   return (
     <div className="flex flex-col overflow-hidden rounded-2xl sm:rounded-3xl border border-slate-200/90 bg-white p-0 shadow-xs animate-pulse">
       {/* Top Image box */}
-      <div className="h-60 sm:h-64 md:h-72 w-full bg-slate-200" />
+      <div className="w-full aspect-[16/9] bg-slate-200" />
 
       {/* Body */}
       <div className="flex flex-1 flex-col p-3.5 sm:p-4 space-y-2.5">

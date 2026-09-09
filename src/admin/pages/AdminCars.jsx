@@ -388,12 +388,16 @@ export default function AdminCars() {
                       {/* Vehicle image & brand */}
                       <td className="px-5 py-4">
                         <div className="flex items-center gap-3">
-                          <div className="relative h-14 w-20 shrink-0 overflow-hidden rounded-xl bg-charcoal-100 ring-1 ring-charcoal-900/10">
+                          <div className="relative w-24 aspect-[16/9] shrink-0 overflow-hidden rounded-xl bg-charcoal-100 ring-1 ring-charcoal-900/10">
                             <img
                               src={displayImage}
                               alt={`${car.brand || 'Vehicle'} ${car.model || ''}`}
-                              className="h-full w-full object-cover"
+                              className="h-full w-full object-cover object-center"
                               loading="lazy"
+                              onError={(e) => {
+                                e.currentTarget.onerror = null
+                                e.currentTarget.src = 'https://images.unsplash.com/photo-1617469767053-d3b523a0b982?auto=format&fit=crop&w=800&q=80'
+                              }}
                             />
                             {imageCount > 1 && (
                               <span className="absolute bottom-1 right-1 flex items-center gap-0.5 rounded bg-charcoal-950/75 px-1 py-0.2 text-[9px] font-bold text-white backdrop-blur-xs">

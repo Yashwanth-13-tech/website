@@ -113,11 +113,15 @@ export default function CarDetailsModal({ car, search, onClose, onContinueBookin
           <div className="lg:col-span-7 space-y-5">
             
             {/* Main Image Box */}
-            <div className="relative h-60 sm:h-72 overflow-hidden rounded-2xl bg-slate-100 border border-slate-200">
+            <div className="relative w-full aspect-[16/9] overflow-hidden rounded-2xl bg-slate-100 border border-slate-200">
               <img
                 src={currentImage}
                 alt={`${car.brand} ${car.model} rental car in Bangalore`}
-                className="h-full w-full object-cover"
+                className="h-full w-full object-cover object-center"
+                onError={(e) => {
+                  e.currentTarget.onerror = null
+                  e.currentTarget.src = 'https://images.unsplash.com/photo-1617469767053-d3b523a0b982?auto=format&fit=crop&w=800&q=80'
+                }}
               />
 
               {/* Prev / Next buttons if multiple photos */}
@@ -157,13 +161,13 @@ export default function CarDetailsModal({ car, search, onClose, onContinueBookin
                     type="button"
                     onClick={() => setActiveImgIndex(i)}
                     aria-label={`View ${car.brand} ${car.model} photo ${i + 1}`}
-                    className={`h-12 w-16 shrink-0 overflow-hidden rounded-lg border-2 transition-all ${
+                    className={`h-12 w-20 aspect-[16/9] shrink-0 overflow-hidden rounded-lg border-2 transition-all ${
                       activeImgIndex === i
                         ? 'border-accent-500 ring-2 ring-accent-500/30'
                         : 'border-slate-200 opacity-60 hover:opacity-100'
                     }`}
                   >
-                    <img src={img} alt={`${car.brand} ${car.model} photo ${i + 1}`} className="h-full w-full object-cover" />
+                    <img src={img} alt={`${car.brand} ${car.model} photo ${i + 1}`} className="h-full w-full object-cover object-center" />
                   </button>
                 ))}
               </div>
@@ -364,7 +368,17 @@ export default function CarDetailsModal({ car, search, onClose, onContinueBookin
                   key={rc.id}
                   className="flex items-center gap-3 rounded-xl bg-white border border-slate-200 p-2.5 shadow-2xs"
                 >
-                  <img src={rc.image} alt={`${rc.brand} ${rc.model} rental in Bangalore`} className="h-12 w-16 rounded-lg object-cover" />
+                  <div className="w-16 aspect-[16/9] shrink-0 overflow-hidden rounded-lg bg-slate-100">
+                    <img
+                      src={rc.image}
+                      alt={`${rc.brand} ${rc.model} rental in Bangalore`}
+                      className="h-full w-full object-cover object-center"
+                      onError={(e) => {
+                        e.currentTarget.onerror = null
+                        e.currentTarget.src = 'https://images.unsplash.com/photo-1617469767053-d3b523a0b982?auto=format&fit=crop&w=800&q=80'
+                      }}
+                    />
+                  </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-bold text-slate-900 truncate">
                       {rc.brand} {rc.model}

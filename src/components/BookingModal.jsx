@@ -456,12 +456,13 @@ Please confirm vehicle availability and handover terms.`
 
             {/* Selected Car Highlight Banner */}
             <div className="flex items-center gap-3 rounded-xl bg-slate-50 border border-slate-200 p-3">
-              <div className="relative h-14 w-20 shrink-0 overflow-hidden rounded-lg bg-slate-200 border border-slate-300/60">
+              <div className="relative w-24 aspect-[16/9] shrink-0 overflow-hidden rounded-lg bg-slate-200 border border-slate-300/60">
                 <img
                   src={selectedCar.image || FALLBACK_CAR_IMAGE}
                   alt={`${selectedCar.brand} ${selectedCar.model} rental car in Bangalore`}
-                  className="h-full w-full object-cover"
+                  className="h-full w-full object-cover object-center"
                   onError={(e) => {
+                    e.currentTarget.onerror = null
                     e.currentTarget.src = FALLBACK_CAR_IMAGE
                   }}
                 />

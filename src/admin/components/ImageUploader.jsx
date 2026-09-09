@@ -110,52 +110,59 @@ export default function ImageUploader({ images = [], onChange }) {
 
       {/* Image Gallery Grid */}
       {images.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-          {images.map((img, idx) => (
-            <div
-              key={idx}
-              className={`group relative h-28 sm:h-32 overflow-hidden rounded-2xl border-2 transition-all bg-charcoal-900 ${
-                idx === 0 ? 'border-accent-500 ring-2 ring-accent-500/20' : 'border-charcoal-900/10'
-              }`}
-            >
-              <img
-                src={img}
-                alt={`Car view ${idx + 1}`}
-                className="h-full w-full object-cover"
-                onError={(e) => {
-                  e.target.src = 'https://images.unsplash.com/photo-1617469767053-d3b523a0b982?auto=format&fit=crop&w=800&q=80'
-                }}
-              />
-              
-              {/* Overlay controls */}
-              <div className="absolute inset-0 bg-charcoal-950/60 opacity-0 transition-opacity group-hover:opacity-100 flex items-center justify-center gap-2 p-2">
-                {idx !== 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-[11px] font-bold text-charcoal-500">
+            <span>Live 16:9 Website Previews:</span>
+            <span className="text-accent-600 font-semibold">Centered &amp; Auto-Fitted</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+            {images.map((img, idx) => (
+              <div
+                key={idx}
+                className={`group relative w-full aspect-[16/9] overflow-hidden rounded-2xl border-2 transition-all bg-charcoal-900 ${
+                  idx === 0 ? 'border-accent-500 ring-2 ring-accent-500/20 shadow-xs' : 'border-charcoal-900/10'
+                }`}
+              >
+                <img
+                  src={img}
+                  alt={`Car view ${idx + 1}`}
+                  className="h-full w-full object-cover object-center"
+                  onError={(e) => {
+                    e.currentTarget.onerror = null
+                    e.currentTarget.src = 'https://images.unsplash.com/photo-1617469767053-d3b523a0b982?auto=format&fit=crop&w=800&q=80'
+                  }}
+                />
+                
+                {/* Overlay controls */}
+                <div className="absolute inset-0 bg-charcoal-950/60 opacity-0 transition-opacity group-hover:opacity-100 flex items-center justify-center gap-2 p-2">
+                  {idx !== 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleSetPrimary(idx)}
+                      title="Make Main Thumbnail"
+                      className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-charcoal-900 hover:bg-accent-500 hover:text-white transition-colors shadow-sm"
+                    >
+                      <Star size={14} />
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => handleSetPrimary(idx)}
-                    title="Make Main Thumbnail"
-                    className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-charcoal-900 hover:bg-accent-500 hover:text-white transition-colors shadow-sm"
+                    onClick={() => handleRemove(idx)}
+                    title="Remove Photo"
+                    className="flex h-8 w-8 items-center justify-center rounded-xl bg-red-600 text-white hover:bg-red-700 transition-colors shadow-sm"
                   >
-                    <Star size={14} />
+                    <X size={14} />
                   </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => handleRemove(idx)}
-                  title="Remove Photo"
-                  className="flex h-8 w-8 items-center justify-center rounded-xl bg-red-600 text-white hover:bg-red-700 transition-colors shadow-sm"
-                >
-                  <X size={14} />
-                </button>
-              </div>
+                </div>
 
-              {idx === 0 && (
-                <span className="absolute bottom-2 left-2 rounded-lg bg-accent-500 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-white shadow-sm">
-                  Primary
-                </span>
-              )}
-            </div>
-          ))}
+                {idx === 0 && (
+                  <span className="absolute bottom-2 left-2 rounded-lg bg-accent-500 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-white shadow-sm">
+                    Primary (Main)
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

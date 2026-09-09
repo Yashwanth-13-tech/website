@@ -462,7 +462,7 @@ export default function InteractiveHeroVisual({ onSelectModel }) {
 
             {/* Large Vehicle Photo Frame */}
             <div
-              className="relative w-full overflow-hidden rounded-xl sm:rounded-2xl border border-slate-200/90 bg-slate-100 aspect-[16/9] sm:aspect-[16/9] lg:aspect-[16/9] xl:aspect-[2/1] min-h-[280px] sm:min-h-[360px] lg:min-h-[420px] shadow-xs transition-transform duration-200 animate-float"
+              className="relative w-full overflow-hidden rounded-xl sm:rounded-2xl border border-slate-200/90 bg-slate-100 aspect-[16/9] shadow-xs transition-transform duration-200 animate-float"
               style={{
                 transform: `translate3d(${mouseTranslateX * 0.7}px, ${mouseTranslateY * 0.7}px, 30px) scale(${motionState.carInnerScale})`,
                 transformStyle: 'preserve-3d',
@@ -472,9 +472,13 @@ export default function InteractiveHeroVisual({ onSelectModel }) {
                 key={activeCar.image}
                 src={activeCar.image}
                 alt={`${activeCar.name} self-drive car rental in Bangalore`}
-                className="h-full w-full object-cover transition-all duration-700 animate-fade-in"
+                className="h-full w-full object-cover object-center transition-all duration-700 animate-fade-in"
                 loading="eager"
                 decoding="async"
+                onError={(e) => {
+                  e.currentTarget.onerror = null
+                  e.currentTarget.src = 'https://images.unsplash.com/photo-1555215695-3004980ad54e?auto=format&fit=crop&w=1400&q=85'
+                }}
               />
               
               {/* Glass Glare Sweep Overlay */}
