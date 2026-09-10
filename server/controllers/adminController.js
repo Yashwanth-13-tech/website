@@ -425,7 +425,7 @@ export const adminController = {
    */
   async uploadImage(req, res) {
     try {
-      const { dataUrl, image, prefix } = req.body || {}
+      const { dataUrl, image, prefix, vehicleId } = req.body || {}
       const targetData = dataUrl || image
       if (!targetData) {
         return res.status(400).json({
@@ -436,7 +436,8 @@ export const adminController = {
 
       const result = await supabaseStorage.uploadImage({
         dataUrl: targetData,
-        prefix: prefix || 'vehicles',
+        prefix: prefix || 'cars',
+        vehicleId: vehicleId || null,
       })
 
       return res.status(200).json({
@@ -459,7 +460,7 @@ export const adminController = {
    */
   async uploadMultipleImages(req, res) {
     try {
-      const { images = [], prefix } = req.body || {}
+      const { images = [], prefix, vehicleId } = req.body || {}
       if (!Array.isArray(images) || images.length === 0) {
         return res.status(400).json({
           success: false,
@@ -469,8 +470,8 @@ export const adminController = {
 
       const results = await Promise.all(
         images.map((img) =>
-          typeof img === 'string' && img.startsWith('data:')
-            ? supabaseStorage.uploadImage({ dataUrl: img, prefix: prefix || 'vehicles' })
+          typeof img === 'string' && supabaseStorage.isDataUrl(img)
+            ? supabaseStorage.uploadImage({ dataUrl: img, prefix: prefix || 'cars', vehicleId: vehicleId || null })
             : Promise.resolve({ success: true, url: img, provider: 'existing' })
         )
       )

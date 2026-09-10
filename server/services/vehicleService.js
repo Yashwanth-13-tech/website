@@ -1,6 +1,7 @@
 import appDb from '../config/database.js'
 import { Vehicle, VEHICLE_CATEGORIES } from '../models/Vehicle.js'
 import availabilityService from './availabilityService.js'
+import supabaseStorage from './supabaseStorage.js'
 
 export const vehicleService = {
   /**
@@ -193,25 +194,167 @@ export const vehicleService = {
     return await appDb.getVehicleById(id)
   },
 
+  /**
+   * Create vehicle: automatically intercepts and uploads any base64 image strings to Supabase Storage
+   */
   async createVehicle(data) {
-    const vehicle = new Vehicle(data)
+    const payload = { ...data }
+
+    // Intercept and sanitize any inline base64 images
+    let rawImages = []
+    if (Array.isArray(payload.images) && payload.images.length > 0) {
+      rawImages = payload.images
+    } else if (payload.image) {
+      rawImages = [payload.image]
+    }
+
+    if (rawImages.length > 0) {
+      const cleanImages = await supabaseStorage.sanitizeAndUploadImages(rawImages)
+      payload.images = cleanImages
+      payload.image = cleanImages[0] || null
+    }
+
+    const vehicle = new Vehicle(payload)
     return await appDb.createVehicle(vehicle)
   },
 
+  /**
+   * Update vehicle: handles automatic upload of new base64 images and safe cleanup of replaced old storage objects
+   */
   async updateVehicle(id, data) {
-    return await appDb.updateVehicle(id, data)
+    const existing = await appDb.getVehicleById(id)
+    if (!existing) return null
+
+    const payload = { ...data }
+
+    // Intercept and sanitize any inline base64 images
+    let rawImages = payload.images
+    if (rawImages !== undefined) {
+      if (Array.isArray(rawImages)) {
+        payload.images = await supabaseStorage.sanitizeAndUploadImages(rawImages, id)
+        if (payload.images.length > 0) {
+          payload.image = payload.images[0]
+        }
+      }
+    } else if (payload.image && supabaseStorage.isDataUrl(payload.image)) {
+      const cleanImages = await supabaseStorage.sanitizeAndUploadImages([payload.image], id)
+      payload.image = cleanImages[0]
+      if (Array.isArray(existing.images) && existing.images.length > 0) {
+        payload.images = [cleanImages[0], ...existing.images.slice(1)]
+      } else {
+        payload.images = [cleanImages[0]]
+      }
+    }
+
+    const updated = await appDb.updateVehicle(id, payload)
+    if (!updated) return null
+
+    // Safe orphan image cleanup (Requirement 13):
+    // Compare existing images with updated images and remove deleted Supabase Storage objects
+    if (existing.images && updated.images) {
+      const oldImages = Array.isArray(existing.images) ? existing.images : [existing.images]
+      const newImages = Array.isArray(updated.images) ? updated.images : [updated.images]
+
+      for (const oldUrl of oldImages) {
+        if (oldUrl && typeof oldUrl === 'string' && !newImages.includes(oldUrl)) {
+          // Check if this was a Supabase stored image before attempting delete
+          if (supabaseStorage.extractStoragePath(oldUrl)) {
+            supabaseStorage.deleteImage(oldUrl).catch((err) => {
+              console.warn(`[VehicleService] Replaced image cleanup notice (${oldUrl}):`, err.message)
+            })
+          }
+        }
+      }
+    }
+
+    return updated
   },
 
   async updateVehicleStatus(id, status) {
     return await appDb.updateVehicle(id, { status })
   },
 
+  /**
+   * Delete vehicle: deletes database record safely, then cleans up associated Supabase Storage objects
+   */
   async deleteVehicle(id) {
-    return await appDb.deleteVehicle(id)
+    const deleted = await appDb.deleteVehicle(id)
+    if (!deleted) return null
+
+    // Safe image deletion for deleted vehicle (Requirement 14)
+    const imagesToDelete = Array.isArray(deleted.images)
+      ? deleted.images
+      : (deleted.image ? [deleted.image] : [])
+
+    for (const imgUrl of imagesToDelete) {
+      if (imgUrl && typeof imgUrl === 'string' && supabaseStorage.extractStoragePath(imgUrl)) {
+        supabaseStorage.deleteImage(imgUrl).catch((err) => {
+          console.warn(`[VehicleService] Deleted vehicle image cleanup notice (${imgUrl}):`, err.message)
+        })
+      }
+    }
+
+    return deleted
   },
 
+  /**
+   * Delete all vehicles: deletes all records and cleans up storage objects
+   */
   async deleteAllVehicles() {
-    return await appDb.deleteAllVehicles()
+    const allVehicles = await appDb.getVehicles()
+    const result = await appDb.deleteAllVehicles()
+
+    // Clean up images for all deleted vehicles
+    for (const v of allVehicles) {
+      const imgs = Array.isArray(v.images) ? v.images : (v.image ? [v.image] : [])
+      for (const img of imgs) {
+        if (img && typeof img === 'string' && supabaseStorage.extractStoragePath(img)) {
+          supabaseStorage.deleteImage(img).catch(() => {})
+        }
+      }
+    }
+
+    return result
+  },
+
+  /**
+   * Migration utility: scans all vehicles in DB and migrates any existing base64 images to Supabase Storage
+   */
+  async migrateExistingBase64Images() {
+    if (!supabaseStorage.isConfigured) {
+      console.log('[VehicleService] Supabase Storage not configured. Skipping inline image migration.')
+      return { migratedCount: 0, totalVehicles: 0 }
+    }
+
+    const vehicles = await appDb.getVehicles()
+    let migratedCount = 0
+
+    for (const vehicle of vehicles) {
+      let needsMigration = false
+      let imagesList = Array.isArray(vehicle.images) ? [...vehicle.images] : []
+
+      if (imagesList.some((img) => supabaseStorage.isDataUrl(img))) {
+        needsMigration = true
+      }
+      if (supabaseStorage.isDataUrl(vehicle.image)) {
+        needsMigration = true
+      }
+
+      if (needsMigration) {
+        console.log(`[VehicleService] Migrating inline base64 images for vehicle #${vehicle.id} (${vehicle.brand} ${vehicle.model})...`)
+        const cleanImages = await supabaseStorage.sanitizeAndUploadImages(imagesList, vehicle.id)
+        const cleanMainImage = cleanImages[0] || (supabaseStorage.isDataUrl(vehicle.image) ? cleanImages[0] : vehicle.image)
+
+        await appDb.updateVehicle(vehicle.id, {
+          images: cleanImages,
+          image: cleanMainImage,
+        })
+        migratedCount++
+        console.log(`[VehicleService] Successfully migrated vehicle #${vehicle.id} images to Supabase Storage.`)
+      }
+    }
+
+    return { migratedCount, totalVehicles: vehicles.length }
   },
 }
 

@@ -71,16 +71,53 @@ export const supabaseStorage = {
     return BUCKET_NAME
   },
 
+  get client() {
+    return supabaseClient
+  },
+
+  /**
+   * Helper to check if a string is a base64 Data URL
+   */
+  isDataUrl(str) {
+    return typeof str === 'string' && str.startsWith('data:image/')
+  },
+
+  /**
+   * Extract storage path from a Supabase CDN URL or return the path if already relative
+   */
+  extractStoragePath(urlOrPath) {
+    if (!urlOrPath || typeof urlOrPath !== 'string') return null
+    if (this.isDataUrl(urlOrPath)) return null
+
+    const publicMarker = `/storage/v1/object/public/${BUCKET_NAME}/`
+    if (urlOrPath.includes(publicMarker)) {
+      return urlOrPath.split(publicMarker)[1]
+    }
+
+    const bucketMarker = `/${BUCKET_NAME}/`
+    if (urlOrPath.includes(bucketMarker)) {
+      const parts = urlOrPath.split(bucketMarker)
+      return parts[parts.length - 1]
+    }
+
+    // If it's a relative path inside bucket (e.g. cars/car_123.webp)
+    if (!urlOrPath.startsWith('http://') && !urlOrPath.startsWith('https://')) {
+      return urlOrPath.replace(/^\/+/, '')
+    }
+
+    return null
+  },
+
   /**
    * Upload an image (base64 Data URL, Buffer, or File) to Supabase Storage
    * @param {Object} options
    * @param {string} [options.dataUrl] - Base64 Data URL (e.g. data:image/webp;base64,...)
    * @param {Buffer} [options.buffer] - Binary Buffer
    * @param {string} [options.mimeType] - MIME type (e.g. 'image/webp', 'image/jpeg')
-   * @param {string} [options.originalName] - Original filename
-   * @param {string} [options.prefix] - Folder prefix inside bucket (default: 'vehicles')
+   * @param {string} [options.prefix] - Folder prefix inside bucket (default: 'cars')
+   * @param {string} [options.vehicleId] - Optional vehicle ID for structured paths (e.g. cars/vehicle-123)
    */
-  async uploadImage({ dataUrl, buffer, mimeType = 'image/webp', originalName = '', prefix = 'vehicles' }) {
+  async uploadImage({ dataUrl, buffer, mimeType = 'image/webp', prefix = 'cars', vehicleId = null }) {
     let fileBuffer = buffer
     let detectedMime = mimeType
 
@@ -105,10 +142,10 @@ export const supabaseStorage = {
     else if (detectedMime.includes('png')) ext = 'png'
     else if (detectedMime.includes('avif')) ext = 'avif'
 
-    const cleanPrefix = prefix.replace(/^\/+|\/+$/g, '')
+    const cleanFolder = vehicleId ? `cars/vehicle-${vehicleId}` : (prefix ? prefix.replace(/^\/+|\/+$/g, '') : 'cars')
     const randomSuffix = Math.random().toString(36).substring(2, 9)
-    const fileName = `car_${Date.now()}_${randomSuffix}.${ext}`
-    const storagePath = `${cleanPrefix}/${fileName}`
+    const fileName = `${Date.now()}_${randomSuffix}.${ext}`
+    const storagePath = `${cleanFolder}/${fileName}`
 
     // 2. If Supabase is configured, upload directly to Supabase Storage
     if (this.isConfigured) {
@@ -127,7 +164,7 @@ export const supabaseStorage = {
         throw new Error(`Supabase Storage upload failed: ${error.message}`)
       }
 
-      // Retrieve public URL from Supabase CDN
+      // Retrieve public CDN URL
       const { data: urlData } = supabaseClient.storage
         .from(BUCKET_NAME)
         .getPublicUrl(storagePath)
@@ -146,8 +183,7 @@ export const supabaseStorage = {
     }
 
     // 3. Fallback if Supabase credentials are not supplied yet (e.g. offline dev):
-    // Return compressed dataUrl so frontend/admin workflow continues without failure
-    console.warn('[Supabase Storage Notice] SUPABASE_URL not configured. Using compressed payload.')
+    console.warn('[Supabase Storage Notice] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not configured. Using compressed payload.')
     return {
       success: true,
       url: dataUrl || `data:${detectedMime};base64,${fileBuffer.toString('base64')}`,
@@ -166,18 +202,12 @@ export const supabaseStorage = {
   async deleteImage(urlOrPath) {
     if (!this.isConfigured || !urlOrPath || typeof urlOrPath !== 'string') return { success: false }
 
-    try {
-      let storagePath = urlOrPath
-      const publicPrefix = `/storage/v1/object/public/${BUCKET_NAME}/`
-      if (urlOrPath.includes(publicPrefix)) {
-        storagePath = urlOrPath.split(publicPrefix)[1]
-      } else if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
-        const parts = urlOrPath.split(`/${BUCKET_NAME}/`)
-        if (parts.length > 1) {
-          storagePath = parts[1]
-        }
-      }
+    const storagePath = this.extractStoragePath(urlOrPath)
+    if (!storagePath) {
+      return { success: false, message: 'Not a recognized Supabase Storage object' }
+    }
 
+    try {
       const { error } = await supabaseClient.storage.from(BUCKET_NAME).remove([storagePath])
       if (error) {
         console.warn(`[Supabase Storage] Delete error for '${storagePath}':`, error.message)
@@ -188,6 +218,46 @@ export const supabaseStorage = {
       console.warn('[Supabase Storage] deleteImage error:', err.message)
       return { success: false, error: err.message }
     }
+  },
+
+  /**
+   * Scan an array of image strings and automatically upload any base64 data URLs to Supabase
+   * Returns array of clean URLs (hosted Supabase URLs or external URLs)
+   * @param {string[]} imagesArray
+   * @param {string|number} [vehicleId]
+   */
+  async sanitizeAndUploadImages(imagesArray = [], vehicleId = null) {
+    if (!Array.isArray(imagesArray)) {
+      if (typeof imagesArray === 'string') {
+        imagesArray = [imagesArray]
+      } else {
+        return []
+      }
+    }
+
+    const sanitized = []
+    for (const item of imagesArray) {
+      if (!item || typeof item !== 'string') continue
+
+      if (this.isDataUrl(item)) {
+        try {
+          const res = await this.uploadImage({
+            dataUrl: item,
+            vehicleId,
+            prefix: 'cars',
+          })
+          sanitized.push(res.url)
+        } catch (err) {
+          console.error('[Supabase Storage] Failed to upload inline base64 image:', err.message)
+          // Preserve as fallback if upload failed so data is not lost
+          sanitized.push(item)
+        }
+      } else {
+        sanitized.push(item)
+      }
+    }
+
+    return sanitized
   },
 }
 

@@ -123,6 +123,9 @@ app.use((req, res, next) => {
   next()
 })
 
+import vehicleService from './services/vehicleService.js'
+import supabaseStorage from './services/supabaseStorage.js'
+
 // --- Global Error Handler ---
 app.use(errorHandler)
 
@@ -130,7 +133,15 @@ app.use(errorHandler)
 app.listen(PORT, HOST, () => {
   console.log(`[BLR CRUIZ Server] Running on http://${HOST}:${PORT}`)
   console.log(`[Database Engine] Active: ${appDb.engine.toUpperCase()}`)
+  console.log(`[Storage Provider] Active: ${supabaseStorage.isConfigured ? 'SUPABASE STORAGE' : 'LOCAL-INLINE'}`)
   console.log(`[Environment] NODE_ENV: ${process.env.NODE_ENV || 'production'}`)
+
+  // Run non-blocking background migration for existing inline images if Supabase Storage is configured
+  if (supabaseStorage.isConfigured) {
+    vehicleService.migrateExistingBase64Images().catch((err) => {
+      console.warn('[Startup Migration Notice]:', err.message)
+    })
+  }
 })
 
 export default app

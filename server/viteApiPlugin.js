@@ -196,7 +196,11 @@ export function razorpayApiPlugin() {
           const counts = await appDb.getCounts()
           return sendJson(res, 200, {
             status: isHealthy ? 'healthy' : 'degraded',
+            database: isHealthy ? 'connected' : 'disconnected',
             engine: appDb.engine,
+            storage: supabaseStorage.isConfigured ? 'supabase' : 'local-inline',
+            storageBucket: supabaseStorage.bucketName,
+            environment: process.env.NODE_ENV || 'development',
             timestamp: new Date().toISOString(),
             counts,
           })
@@ -696,14 +700,15 @@ export function razorpayApiPlugin() {
             const session = await getAdminSession(req)
             if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
             const body = await parseRequestBody(req)
-            const { dataUrl, image, prefix } = body
+            const { dataUrl, image, prefix, vehicleId } = body
             const targetData = dataUrl || image
             if (!targetData) {
               return sendJson(res, 400, { success: false, message: 'Image data URL required' })
             }
             const result = await supabaseStorage.uploadImage({
               dataUrl: targetData,
-              prefix: prefix || 'vehicles',
+              prefix: prefix || 'cars',
+              vehicleId: vehicleId || null,
             })
             return sendJson(res, 200, { success: true, message: 'Image uploaded successfully', ...result })
           } catch (err) {
@@ -716,11 +721,11 @@ export function razorpayApiPlugin() {
             const session = await getAdminSession(req)
             if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
             const body = await parseRequestBody(req)
-            const { images = [], prefix } = body
+            const { images = [], prefix, vehicleId } = body
             const results = await Promise.all(
               images.map((img) =>
-                typeof img === 'string' && img.startsWith('data:')
-                  ? supabaseStorage.uploadImage({ dataUrl: img, prefix: prefix || 'vehicles' })
+                typeof img === 'string' && supabaseStorage.isDataUrl(img)
+                  ? supabaseStorage.uploadImage({ dataUrl: img, prefix: prefix || 'cars', vehicleId: vehicleId || null })
                   : Promise.resolve({ success: true, url: img, provider: 'existing' })
               )
             )

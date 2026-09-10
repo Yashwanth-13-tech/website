@@ -109,9 +109,10 @@ export const imageService = {
    * Upload a compressed data URL to backend Supabase Storage endpoint
    * @param {string} dataUrl
    * @param {string} [token]
+   * @param {string|number} [vehicleId]
    * @returns {Promise<string>} public Supabase CDN URL
    */
-  async uploadToStorage(dataUrl, token) {
+  async uploadToStorage(dataUrl, token, vehicleId = null) {
     if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
       return dataUrl // Already a hosted URL
     }
@@ -126,7 +127,7 @@ export const imageService = {
       const res = await fetch('/api/admin/upload-image', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ dataUrl, prefix: 'vehicles' }),
+        body: JSON.stringify({ dataUrl, prefix: 'cars', vehicleId }),
       })
 
       if (!res.ok) {
@@ -147,11 +148,12 @@ export const imageService = {
    * Process, compress, and upload multiple files to Supabase Storage
    * @param {FileList|File[]} files
    * @param {string} [token]
+   * @param {string|number} [vehicleId]
    * @returns {Promise<string[]>} array of public URLs
    */
-  async processAndUploadMultiple(files, token) {
+  async processAndUploadMultiple(files, token, vehicleId = null) {
     const dataUrls = await this.processMultipleFiles(files)
-    const uploadPromises = dataUrls.map((dataUrl) => this.uploadToStorage(dataUrl, token))
+    const uploadPromises = dataUrls.map((dataUrl) => this.uploadToStorage(dataUrl, token, vehicleId))
     return await Promise.all(uploadPromises)
   },
 }
