@@ -21,10 +21,10 @@ export default function ImageUploader({ images = [], onChange }) {
     setError(null)
     setLoading(true)
     try {
-      const processed = await imageService.processMultipleFiles(files)
+      const processed = await imageService.processAndUploadMultiple(files)
       onChange([...images, ...processed])
     } catch (err) {
-      setError(err.message || 'Failed to process image.')
+      setError(err.message || 'Failed to process and upload image.')
     } finally {
       setLoading(false)
     }

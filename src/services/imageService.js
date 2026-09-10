@@ -104,7 +104,58 @@ export const imageService = {
     const promises = limitedFiles.map((file) => this.processAndCompress(file))
     return await Promise.all(promises)
   },
+
+  /**
+   * Upload a compressed data URL to backend Supabase Storage endpoint
+   * @param {string} dataUrl
+   * @param {string} [token]
+   * @returns {Promise<string>} public Supabase CDN URL
+   */
+  async uploadToStorage(dataUrl, token) {
+    if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
+      return dataUrl // Already a hosted URL
+    }
+
+    try {
+      const authToken = token || localStorage.getItem('blrcruiz_admin_token') || ''
+      const headers = { 'Content-Type': 'application/json' }
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`
+      }
+
+      const res = await fetch('/api/admin/upload-image', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ dataUrl, prefix: 'vehicles' }),
+      })
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        console.warn('[ImageService] Supabase Storage upload HTTP notice:', errData.message || res.statusText)
+        return dataUrl
+      }
+
+      const json = await res.json()
+      return json.url || dataUrl
+    } catch (err) {
+      console.warn('[ImageService] Network notice during Supabase Storage upload:', err.message)
+      return dataUrl
+    }
+  },
+
+  /**
+   * Process, compress, and upload multiple files to Supabase Storage
+   * @param {FileList|File[]} files
+   * @param {string} [token]
+   * @returns {Promise<string[]>} array of public URLs
+   */
+  async processAndUploadMultiple(files, token) {
+    const dataUrls = await this.processMultipleFiles(files)
+    const uploadPromises = dataUrls.map((dataUrl) => this.uploadToStorage(dataUrl, token))
+    return await Promise.all(uploadPromises)
+  },
 }
 
 export default imageService
+
 

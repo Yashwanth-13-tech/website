@@ -5,6 +5,7 @@ import appDb from './config/database.js'
 import vehicleService from './services/vehicleService.js'
 import locationService from './services/locationService.js'
 import availabilityService from './services/availabilityService.js'
+import supabaseStorage from './services/supabaseStorage.js'
 
 function parseRequestBody(req) {
   return new Promise((resolve) => {
@@ -687,6 +688,51 @@ export function razorpayApiPlugin() {
           if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
           const bookings = await appDb.getBookings()
           return sendJson(res, 200, { success: true, count: bookings.length, bookings })
+        }
+
+        // --- Supabase Storage Image Upload Endpoints ---
+        if (url === '/api/admin/upload-image' && req.method === 'POST') {
+          try {
+            const session = await getAdminSession(req)
+            if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
+            const body = await parseRequestBody(req)
+            const { dataUrl, image, prefix } = body
+            const targetData = dataUrl || image
+            if (!targetData) {
+              return sendJson(res, 400, { success: false, message: 'Image data URL required' })
+            }
+            const result = await supabaseStorage.uploadImage({
+              dataUrl: targetData,
+              prefix: prefix || 'vehicles',
+            })
+            return sendJson(res, 200, { success: true, message: 'Image uploaded successfully', ...result })
+          } catch (err) {
+            return sendJson(res, 500, { success: false, message: err.message })
+          }
+        }
+
+        if (url === '/api/admin/upload-images' && req.method === 'POST') {
+          try {
+            const session = await getAdminSession(req)
+            if (!session) return sendJson(res, 401, { success: false, message: 'Admin token required' })
+            const body = await parseRequestBody(req)
+            const { images = [], prefix } = body
+            const results = await Promise.all(
+              images.map((img) =>
+                typeof img === 'string' && img.startsWith('data:')
+                  ? supabaseStorage.uploadImage({ dataUrl: img, prefix: prefix || 'vehicles' })
+                  : Promise.resolve({ success: true, url: img, provider: 'existing' })
+              )
+            )
+            return sendJson(res, 200, {
+              success: true,
+              count: results.length,
+              images: results.map((r) => r.url),
+              details: results,
+            })
+          } catch (err) {
+            return sendJson(res, 500, { success: false, message: err.message })
+          }
         }
 
         next()

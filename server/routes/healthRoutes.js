@@ -1,5 +1,6 @@
 import express from 'express'
 import appDb from '../config/database.js'
+import supabaseStorage from '../services/supabaseStorage.js'
 
 const router = express.Router()
 
@@ -35,6 +36,8 @@ router.get('/health', async (req, res) => {
     service: 'BLR CRUIZ Express API',
     database: isDbHealthy ? 'connected' : 'disconnected',
     engine: appDb.engine,
+    storage: supabaseStorage.isConfigured ? 'supabase' : 'local-inline',
+    storageBucket: supabaseStorage.bucketName,
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
     port: Number(process.env.PORT) || 5000,

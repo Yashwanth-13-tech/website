@@ -2,6 +2,7 @@ import appDb from '../config/database.js'
 import vehicleService from '../services/vehicleService.js'
 import locationService from '../services/locationService.js'
 import availabilityService from '../services/availabilityService.js'
+import supabaseStorage from '../services/supabaseStorage.js'
 
 export const adminController = {
   /**
@@ -417,6 +418,78 @@ export const adminController = {
       })
     }
   },
+
+  /**
+   * POST /api/admin/upload-image
+   * Uploads a car photo to Supabase Storage and returns the public URL
+   */
+  async uploadImage(req, res) {
+    try {
+      const { dataUrl, image, prefix } = req.body || {}
+      const targetData = dataUrl || image
+      if (!targetData) {
+        return res.status(400).json({
+          success: false,
+          message: 'Image data URL is required for upload.',
+        })
+      }
+
+      const result = await supabaseStorage.uploadImage({
+        dataUrl: targetData,
+        prefix: prefix || 'vehicles',
+      })
+
+      return res.status(200).json({
+        success: true,
+        message: 'Image uploaded successfully to Supabase Storage.',
+        ...result,
+      })
+    } catch (err) {
+      console.error('[AdminController uploadImage Error]:', err)
+      return res.status(500).json({
+        success: false,
+        message: err.message || 'Failed to upload image to Supabase Storage.',
+      })
+    }
+  },
+
+  /**
+   * POST /api/admin/upload-images
+   * Uploads multiple car photos to Supabase Storage in parallel
+   */
+  async uploadMultipleImages(req, res) {
+    try {
+      const { images = [], prefix } = req.body || {}
+      if (!Array.isArray(images) || images.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Images array is required.',
+        })
+      }
+
+      const results = await Promise.all(
+        images.map((img) =>
+          typeof img === 'string' && img.startsWith('data:')
+            ? supabaseStorage.uploadImage({ dataUrl: img, prefix: prefix || 'vehicles' })
+            : Promise.resolve({ success: true, url: img, provider: 'existing' })
+        )
+      )
+
+      return res.status(200).json({
+        success: true,
+        count: results.length,
+        images: results.map((r) => r.url),
+        details: results,
+      })
+    } catch (err) {
+      console.error('[AdminController uploadMultipleImages Error]:', err)
+      return res.status(500).json({
+        success: false,
+        message: err.message || 'Failed to upload images to Supabase Storage.',
+      })
+    }
+  },
 }
 
 export default adminController
+

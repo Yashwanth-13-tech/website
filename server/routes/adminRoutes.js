@@ -30,4 +30,9 @@ router.post('/locations', adminController.createLocation)
 router.put('/locations/:id', adminController.updateLocation)
 router.delete('/locations/:id', adminController.deleteLocation)
 
+// Supabase Storage Image Upload
+router.post('/upload-image', adminController.uploadImage)
+router.post('/upload-images', adminController.uploadMultipleImages)
+
 export default router
+
